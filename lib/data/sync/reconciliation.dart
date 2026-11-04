@@ -23,6 +23,10 @@ class Reconciliation {
   /// App-local state (FSD §6.7) — shared_preferences, not the schema.
   static const flagKey = 'reconciled_v1';
 
+  /// One-time catch-up for devices reconciled BEFORE the §5.2 enqueue
+  /// invariant existed (rows written in that gap were never enqueued).
+  static const catchUpKey = 'outbox_catchup_v1';
+
   /// Synced tables (Architecture §1.6), in seed order: parents before
   /// children (tracked_supplements before supplement_entries). Outbox
   /// `entity_type` = the table name, which is also the cloud table name.
@@ -72,30 +76,63 @@ class Reconciliation {
                 'UPDATE $t SET user_id = ? WHERE user_id = ?',
                 [cloudId, localId]);
           }
+          // The User row's own outbox entry points at its id — remap it too.
+          await db.customStatement(
+              "UPDATE outbox_entries SET entity_id = ? "
+              "WHERE entity_type = 'users' AND entity_id = ?",
+              [cloudId, localId]);
         }
 
         // 2. One-time seed: every existing synced row, User first. A repeat
         //    seed (crash-retry) only adds harmless duplicate upserts.
-        await _enqueue('users', [cloudId]);
-        seeded['users'] = 1;
-        for (final t in _syncedTables) {
-          final rows = await db.customSelect(
-            'SELECT id FROM $t WHERE user_id = ?',
-            variables: [Variable.withString(cloudId)],
-          ).get();
-          final ids = rows.map((r) => r.read<String>('id')).toList();
-          await _enqueue(t, ids);
-          seeded[t] = ids.length;
-        }
+        seeded.addAll(await _seedAll(cloudId));
       });
 
-      // 3. Flag only after the transaction committed.
+      // 3. Flag only after the transaction committed. A fresh reconcile
+      //    already covers everything, so the catch-up isn't needed.
       await prefs.setBool(flagKey, true);
+      await prefs.setBool(catchUpKey, true);
       debugPrint('Reconciliation: DONE  $localId -> $cloudId');
       debugPrint('Reconciliation: seeded outbox $seeded');
     } catch (e) {
       debugPrint('Reconciliation: FAILED (rolled back; retry next launch): $e');
     }
+  }
+
+  /// One-time catch-up (build note 2026-11-04): this device reconciled before
+  /// the enqueue invariant existed, so rows written in between were never
+  /// enqueued. Re-enqueue every synced row once; already-backed-up rows just
+  /// re-upsert identically (idempotent). Never throws.
+  static Future<void> catchUpIfNeeded() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!(prefs.getBool(flagKey) ?? false)) return; // reconcile seeds instead
+    if (prefs.getBool(catchUpKey) ?? false) return;
+    try {
+      final uid = (await db.userDao.getUser())!.id;
+      late Map<String, int> seeded;
+      await db.transaction(() async => seeded = await _seedAll(uid));
+      await prefs.setBool(catchUpKey, true);
+      debugPrint('Outbox catch-up: DONE $seeded');
+    } catch (e) {
+      debugPrint('Outbox catch-up: FAILED (retry next launch): $e');
+    }
+  }
+
+  /// Enqueue every synced row for [uid], User first. Call inside a transaction.
+  static Future<Map<String, int>> _seedAll(String uid) async {
+    final seeded = <String, int>{};
+    await _enqueue('users', [uid]);
+    seeded['users'] = 1;
+    for (final t in _syncedTables) {
+      final rows = await db.customSelect(
+        'SELECT id FROM $t WHERE user_id = ?',
+        variables: [Variable.withString(uid)],
+      ).get();
+      final ids = rows.map((r) => r.read<String>('id')).toList();
+      await _enqueue(t, ids);
+      seeded[t] = ids.length;
+    }
+    return seeded;
   }
 
   static Future<void> _enqueue(String entityType, List<String> ids) async {

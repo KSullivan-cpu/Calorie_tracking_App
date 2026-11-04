@@ -17,6 +17,9 @@ Future<void> main() async {
   // screen gets a userId (build decision A1). Local-only, no network; no-op
   // until a cloud identity exists from an earlier launch.
   await Reconciliation.runIfNeeded();
+  // One-time: enqueue rows written after reconcile but before the §5.2
+  // invariant existed (this emulator's gap). No-op everywhere else.
+  await Reconciliation.catchUpIfNeeded();
 
   // Resolve the single implicit user, then decide the landing screen once.
   // No targets row yet  -> onboarding;  row exists (even all-null) -> dashboard.
