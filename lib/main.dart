@@ -1,6 +1,9 @@
-﻿import 'package:flutter/material.dart';
+﻿import 'dart:async' show unawaited;
+
+import 'package:flutter/material.dart';
 
 import 'core/bootstrap.dart';
+import 'data/sync/cloud_identity.dart';
 import 'features/dashboard/dashboard_screen.dart';
 import 'features/onboarding/onboarding_screen.dart';
 
@@ -15,6 +18,10 @@ Future<void> main() async {
   final targets = await db.perUserTargetsDao.getTargets(userId);
 
   runApp(CalorieApp(userId: userId, hasTargets: targets != null));
+
+  // Slice 2 thin thread step 2: anonymous cloud identity, in the background.
+  // Never awaited — launch and offline use never wait on the cloud (FSD §5.1).
+  unawaited(CloudIdentity.ensureAnonymousSession());
 }
 
 class CalorieApp extends StatelessWidget {
