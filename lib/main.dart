@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'core/bootstrap.dart';
 import 'data/sync/cloud_identity.dart';
+import 'data/sync/drain.dart';
 import 'data/sync/reconciliation.dart';
 import 'features/dashboard/dashboard_screen.dart';
 import 'features/onboarding/onboarding_screen.dart';
@@ -27,7 +28,11 @@ Future<void> main() async {
 
   // Slice 2 thin thread step 2: anonymous cloud identity, in the background.
   // Never awaited — launch and offline use never wait on the cloud (FSD §5.1).
-  unawaited(CloudIdentity.ensureAnonymousSession());
+  // Step 4: then a bare drain (gated on the reconciled flag inside).
+  unawaited(() async {
+    await CloudIdentity.ensureAnonymousSession();
+    await Drain.run();
+  }());
 }
 
 class CalorieApp extends StatelessWidget {
