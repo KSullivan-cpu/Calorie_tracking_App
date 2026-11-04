@@ -1,0 +1,23 @@
+[
+  { "name": "apple", "aliases": ["apples"], "class": "fruit", "cupsPerItem": 1.25, "gramsPerItem": 182 },
+  { "name": "banana", "aliases": ["bananas"], "class": "fruit", "cupsPerItem": 0.5, "gramsPerItem": 142 },
+  { "name": "orange", "aliases": ["oranges"], "class": "fruit", "cupsPerItem": 1.0, "gramsPerItem": 131 },
+  { "name": "pear", "aliases": ["pears"], "class": "fruit", "cupsPerItem": 1.3, "gramsPerItem": 178 },
+  { "name": "peach", "aliases": ["peaches"], "class": "fruit", "cupsPerItem": 1.0, "gramsPerItem": 150 },
+  { "name": "avocado", "aliases": ["avocados"], "class": "fruit", "cupsPerItem": 1.0, "gramsPerItem": 150 },
+  { "name": "grape", "aliases": ["grapes"], "class": "fruit", "gramsPerCup": 151, "gramsPerItem": 5 },
+  { "name": "strawberry", "aliases": ["strawberries"], "class": "fruit", "gramsPerCup": 144, "gramsPerItem": 12 },
+  { "name": "blueberry", "aliases": ["blueberries"], "class": "fruit", "gramsPerCup": 148 },
+  { "name": "raspberry", "aliases": ["raspberries"], "class": "fruit", "gramsPerCup": 123 },
+  { "name": "carrot", "aliases": ["carrots"], "class": "veggie", "cupsPerItem": 0.5, "gramsPerItem": 61 },
+  { "name": "tomato", "aliases": ["tomatoes"], "class": "veggie", "cupsPerItem": 1.0, "gramsPerItem": 123 },
+  { "name": "bell pepper", "aliases": ["bell peppers", "pepper", "peppers"], "class": "veggie", "cupsPerItem": 1.0, "gramsPerItem": 119 },
+  { "name": "cucumber", "aliases": ["cucumbers"], "class": "veggie", "cupsPerItem": 2.0, "gramsPerItem": 301 },
+  { "name": "potato", "aliases": ["potatoes"], "class": "veggie", "cupsPerItem": 1.0, "gramsPerItem": 173 },
+  { "name": "onion", "aliases": ["onions"], "class": "veggie", "cupsPerItem": 1.0, "gramsPerItem": 110 },
+  { "name": "broccoli", "aliases": [], "class": "veggie", "gramsPerCup": 91 },
+  { "name": "spinach", "aliases": [], "class": "veggie", "gramsPerCup": 30 },
+  { "name": "kale", "aliases": [], "class": "veggie", "gramsPerCup": 67 },
+  { "name": "lettuce", "aliases": ["romaine", "romaine lettuce"], "class": "veggie", "gramsPerCup": 47 },
+  { "name": "green beans", "aliases": ["green bean"], "class": "veggie", "gramsPerCup": 100 }
+]

@@ -43,3 +43,6 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Local run-time keys (Supabase + FDC) — never commit
+env.json
