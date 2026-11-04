@@ -4,12 +4,18 @@ import 'package:flutter/material.dart';
 
 import 'core/bootstrap.dart';
 import 'data/sync/cloud_identity.dart';
+import 'data/sync/reconciliation.dart';
 import 'features/dashboard/dashboard_screen.dart';
 import 'features/onboarding/onboarding_screen.dart';
 
 Future<void> main() async {
   // bootstrap(): ensureInitialized + create DB + implicit User row (UUID v7).
   await bootstrap();
+
+  // Slice 2 thin thread step 3: identity rewrite + outbox seed, BEFORE any
+  // screen gets a userId (build decision A1). Local-only, no network; no-op
+  // until a cloud identity exists from an earlier launch.
+  await Reconciliation.runIfNeeded();
 
   // Resolve the single implicit user, then decide the landing screen once.
   // No targets row yet  -> onboarding;  row exists (even all-null) -> dashboard.
