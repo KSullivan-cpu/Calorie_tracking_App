@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/bootstrap.dart' show cloudConfigured;
+import 'reconciliation.dart';
 
 /// Supabase anonymous identity (Architecture §2.3 LG-1; Slice 2 FSD §5.1).
 ///
@@ -26,6 +27,16 @@ class CloudIdentity {
       debugPrint('Cloud identity: reusing session ${existing.id} '
           '(anonymous=${existing.isAnonymous})');
       return existing.id;
+    }
+
+    // Identity guard (Stage 3, 2026-11-05): once reconciled, all local data
+    // belongs to the reconciled uid. Minting a NEW anonymous identity would
+    // orphan it (every upsert would fail RLS). The drain escalates the
+    // missing session as an auth error instead (LG-2 -> re-secure backup).
+    if (await Reconciliation.isReconciled()) {
+      debugPrint('Cloud identity: no session after reconciliation — '
+          'NOT creating a new identity (escalates via drain)');
+      return null;
     }
 
     try {

@@ -3,9 +3,9 @@
 import 'package:flutter/material.dart';
 
 import 'core/bootstrap.dart';
-import 'data/sync/cloud_identity.dart';
-import 'data/sync/drain.dart';
 import 'data/sync/reconciliation.dart';
+import 'data/sync/sync_health.dart';
+import 'data/sync/sync_triggers.dart';
 import 'features/dashboard/dashboard_screen.dart';
 import 'features/onboarding/onboarding_screen.dart';
 
@@ -20,6 +20,8 @@ Future<void> main() async {
   // One-time: enqueue rows written after reconcile but before the §5.2
   // invariant existed (this emulator's gap). No-op everywhere else.
   await Reconciliation.catchUpIfNeeded();
+  // LG-2 escalation state (app-local) for Stage 5's Needs-attention queue.
+  await SyncHealth.load();
 
   // Resolve the single implicit user, then decide the landing screen once.
   // No targets row yet  -> onboarding;  row exists (even all-null) -> dashboard.
@@ -29,13 +31,11 @@ Future<void> main() async {
 
   runApp(CalorieApp(userId: userId, hasTargets: targets != null));
 
-  // Slice 2 thin thread step 2: anonymous cloud identity, in the background.
-  // Never awaited — launch and offline use never wait on the cloud (FSD §5.1).
-  // Step 4: then a bare drain (gated on the reconciled flag inside).
-  unawaited(() async {
-    await CloudIdentity.ensureAnonymousSession();
-    await Drain.run();
-  }());
+  // Stage 3: hybrid drain triggers (launch, mutation-debounced, connectivity
+  // regained, foreground/background, 15-min foreground backstop). Each
+  // trigger ensures the anonymous session, then drains. Never awaited —
+  // launch and offline use never wait on the cloud (FSD §5.1).
+  unawaited(SyncTriggers.start());
 }
 
 class CalorieApp extends StatelessWidget {

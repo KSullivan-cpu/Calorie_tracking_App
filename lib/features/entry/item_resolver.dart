@@ -122,13 +122,14 @@ Future<ItemFill> fillForWithMeasures({
   required FoodUnit unit,
 }) async {
   var m = match;
-  final needsMeasures = produceEntry == null &&
+  final needsMeasures =
+      produceEntry == null &&
       m != null &&
       (unit == FoodUnit.cups || unit == FoodUnit.item) &&
       resolveGramsFromMatch(m, qty, unit) == null;
   if (needsMeasures) {
     try {
-      m = await provider.resolveMeasures(m!);
+      m = await provider.resolveMeasures(m);
     } catch (_) {
       // leave m as-is; fillFor falls to the manual status
     }
