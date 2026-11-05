@@ -3,6 +3,8 @@ import 'package:drift/drift.dart' show Value;
 
 import 'package:calorie_tracking_app/core/bootstrap.dart';
 import 'package:calorie_tracking_app/data/app_database.dart';
+import 'package:calorie_tracking_app/data/daos/lookup_cache_dao.dart'
+    show PortionValues;
 import 'package:calorie_tracking_app/data/enums.dart';
 import 'package:calorie_tracking_app/data/lookup/fdc_provider.dart';
 import 'package:calorie_tracking_app/data/lookup/lookup_provider.dart';
@@ -108,9 +110,190 @@ class _EntryScreenState extends State<EntryScreen> {
     item.status = fill.status;
   }
 
+  // --- Slice 2 Stage 4: saved -> cache -> FDC -> manual (FSD §4) ---------
+
+  static const _gPerOz = 28.349523125;
+  bool _isWeight(FoodUnit u) => u == FoodUnit.g || u == FoodUnit.oz;
+  double _toGrams(double q, FoodUnit u) => u == FoodUnit.oz ? q * _gPerOz : q;
+
+  /// Copy + scale a stored portion (saved item or cache row) onto [item]:
+  /// total ÷ base qty × parsed qty (Architecture §1 Decision 8). No qty typed
+  /// -> base portion. g<->oz converts; other unit differences fill at base
+  /// with a "unit mismatch — adjust" flag (G4).
+  void _fillFromStored(
+    DraftItem item, {
+    required double baseQty,
+    required FoodUnit baseUnit,
+    required PortionValues v,
+    required ItemSource source,
+  }) {
+    final parsedQty = double.tryParse(item.qtyCtl.text.trim()) ?? 1;
+    double factor = 1;
+    item.unitMismatch = false;
+    if (!item.hasQty || baseQty <= 0) {
+      item.unit = baseUnit;
+      item.qtyCtl.text = _fmt(baseQty);
+    } else if (item.unit == baseUnit) {
+      factor = parsedQty / baseQty;
+    } else if (_isWeight(item.unit) && _isWeight(baseUnit)) {
+      factor = _toGrams(parsedQty, item.unit) / _toGrams(baseQty, baseUnit);
+    } else {
+      item.unit = baseUnit;
+      item.qtyCtl.text = _fmt(baseQty);
+      item.unitMismatch = true;
+    }
+    final vals = [
+      v.calories, v.proteinG, v.carbsG, v.fatsG,
+      v.fiberG, v.addedSugarG, v.fruitCups, v.veggieCups,
+    ];
+    final ctls = item.valueCtls;
+    for (var i = 0; i < ctls.length; i++) {
+      ctls[i].text = _fmt(vals[i] * factor);
+    }
+    item.lastQty = double.tryParse(item.qtyCtl.text.trim()) ?? 1;
+    item.source = source;
+    item.candidates = const [];
+    item.selectedIndex = -1;
+    item.valuesEdited = false;
+    final base = source == ItemSource.frequent
+        ? 'Matched from frequent items — tap to check'
+        : 'From your library';
+    item.status =
+        item.unitMismatch ? '$base · Unit mismatch — adjust' : base;
+  }
+
+  PortionValues _valuesOf(DraftItem i) => PortionValues(
+        calories: _d(i.calCtl),
+        proteinG: _d(i.proteinCtl),
+        carbsG: _d(i.carbsCtl),
+        fatsG: _d(i.fatsCtl),
+        fiberG: _d(i.fiberCtl),
+        addedSugarG: _d(i.sugarCtl),
+        fruitCups: _d(i.fruitCtl),
+        veggieCups: _d(i.veggieCtl),
+      );
+
+  /// Local tiers (saved, then cache). True if one resolved the item.
+  Future<bool> _resolveLocal(DraftItem item, String name) async {
+    final saved = await db.savedItemDao.findByName(widget.userId, name);
+    if (saved != null) {
+      item.cacheRow = null;
+      _fillFromStored(item,
+          baseQty: saved.quantity,
+          baseUnit: saved.unit,
+          v: PortionValues(
+            calories: saved.calories,
+            proteinG: saved.proteinG,
+            carbsG: saved.carbsG,
+            fatsG: saved.fatsG,
+            fiberG: saved.fiberG,
+            addedSugarG: saved.addedSugarG,
+            fruitCups: saved.fruitCups,
+            veggieCups: saved.veggieCups,
+          ),
+          source: ItemSource.saved);
+      return true;
+    }
+    final cached = await db.lookupCacheDao.findByName(widget.userId, name);
+    if (cached != null) {
+      item.cacheRow = cached;
+      _fillFromStored(item,
+          baseQty: cached.quantity,
+          baseUnit: cached.unit,
+          v: PortionValues(
+            calories: cached.calories,
+            proteinG: cached.proteinG,
+            carbsG: cached.carbsG,
+            fatsG: cached.fatsG,
+            fiberG: cached.fiberG,
+            addedSugarG: cached.addedSugarG,
+            fruitCups: cached.fruitCups,
+            veggieCups: cached.veggieCups,
+          ),
+          source: ItemSource.frequent);
+      return true;
+    }
+    return false;
+  }
+
+  // --- Stage 4d: Save to library (FSD §3.1, G5) -----------------------------
+
+  /// Name dialog → duplicate check → "Replace?". Marks the card; nothing is
+  /// written until commit. "No" on Replace returns to the name field.
+  Future<void> _markSave(DraftItem item) async {
+    var name = item.saveName ?? item.nameCtl.text.trim();
+    while (true) {
+      final entered = await _askSaveName(name);
+      if (entered == null || entered.trim().isEmpty) return; // cancelled
+      name = entered.trim();
+      final existing =
+          await db.savedItemDao.findByName(widget.userId, name);
+      if (existing == null) {
+        setState(() {
+          item.saveToLibrary = true;
+          item.saveName = name;
+          item.replaces = null;
+        });
+        return;
+      }
+      if (await _askReplace(existing) == true) {
+        setState(() {
+          item.saveToLibrary = true;
+          item.saveName = name;
+          item.replaces = existing;
+        });
+        return;
+      }
+      // No -> back to the name field (rename or cancel)
+    }
+  }
+
+  void _unmarkSave(DraftItem item) => setState(() {
+        item.saveToLibrary = false;
+        item.saveName = null;
+        item.replaces = null;
+      });
+
+  // The dialog owns its controller (disposed when the dialog's State is torn
+  // down, AFTER the exit animation) — disposing it right after showDialog
+  // returned crashed the still-animating TextField.
+  Future<String?> _askSaveName(String initial) => showDialog<String>(
+        context: context,
+        builder: (_) => _SaveNameDialog(initial: initial),
+      );
+
+  Future<bool?> _askReplace(SavedItem existing) => showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Replace?'),
+          content: Text(
+            'Your library already has "${existing.name}" '
+            '(${_fmt(existing.quantity)} ${existing.unit.name} · '
+            '${_fmt(existing.calories)} kcal). Replace it?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('No'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Replace'),
+            ),
+          ],
+        ),
+      );
+
+  /// Parse-time resolve runs the full tier order. A user-initiated 🔍 re-search
+  /// ([preserveOnFailure]) goes straight to FDC — it's an explicit "look this
+  /// up online", e.g. to replace a Frequent match (FSD §4 "row exists").
   Future<void> _resolve(DraftItem item, {bool preserveOnFailure = false}) async {
     final name = item.nameCtl.text.trim();
     if (name.isEmpty) return;
+    if (!preserveOnFailure && await _resolveLocal(item, name)) {
+      if (mounted) setState(() {});
+      return;
+    }
     final qty = double.tryParse(item.qtyCtl.text.trim()) ?? 1;
     final produceEntry = produce.match(name);
     final candidates = await lookupCandidates(_provider, name);
@@ -137,6 +320,10 @@ class _EntryScreenState extends State<EntryScreen> {
     );
     item.lastQty = qty;
     _applyFill(item, fill);
+    item.source = fill.macros != null ? ItemSource.fdc : ItemSource.manual;
+    item.cacheRow = null;
+    item.unitMismatch = false;
+    item.valuesEdited = false;
     if (mounted) setState(() {});
   }
 
@@ -152,6 +339,7 @@ class _EntryScreenState extends State<EntryScreen> {
       d.nameCtl.text = p.name;
       d.qtyCtl.text = _fmt(p.qty);
       d.lastQty = p.qty;
+      d.hasQty = p.hasQty;
       d.status = 'Resolving…';
       return d;
     }).toList();
@@ -182,7 +370,11 @@ class _EntryScreenState extends State<EntryScreen> {
       unit: item.unit,
     );
     if (!mounted) return;
-    setState(() => _applyFill(item, fill));
+    setState(() {
+      _applyFill(item, fill);
+      item.source = fill.macros != null ? ItemSource.fdc : ItemSource.manual;
+      item.valuesEdited = false;
+    });
   }
 
   void _rescaleQty(DraftItem item) {
@@ -243,7 +435,67 @@ class _EntryScreenState extends State<EntryScreen> {
         .toList();
 
     setState(() => _saving = true);
-    await db.foodEntryDao.insertEntries(companions);
+    // One transaction: entries (+ outbox) and cache writes (FSD §4 "On
+    // commit"; Stage 4 D4). Counts bump only here, never at lookup.
+    await db.transaction(() async {
+      await db.foodEntryDao.insertEntries(companions);
+      for (final i in valid) {
+        final name = i.nameCtl.text.trim();
+        final qty = double.tryParse(i.qtyCtl.text.trim()) ?? 1;
+        switch (i.source) {
+          case ItemSource.fdc:
+            final m = (i.selectedIndex >= 0 &&
+                    i.selectedIndex < i.candidates.length)
+                ? i.candidates[i.selectedIndex]
+                : null;
+            await db.lookupCacheDao.recordFdcCommit(
+              userId: widget.userId,
+              name: name,
+              quantity: qty,
+              unit: i.unit,
+              values: _valuesOf(i),
+              sourceRef: m?.sourceId == null ? null : 'fdc:${m!.sourceId}',
+            );
+          case ItemSource.frequent:
+            if (i.cacheRow != null) {
+              await db.lookupCacheDao.recordFrequentUse(
+                i.cacheRow!,
+                quantity: qty,
+                unit: i.unit,
+                editedValues: i.valuesEdited ? _valuesOf(i) : null,
+              );
+            }
+          case ItemSource.saved:
+          case ItemSource.manual:
+            break; // not cached (G6)
+        }
+
+        // Save to library (FSD §3.1): as logged; Replace = soft-delete the
+        // existing item + insert (G5). Re-checked here so a same-name save
+        // earlier in this batch is replaced too. Each write enqueued.
+        if (i.saveToLibrary) {
+          final saveName = (i.saveName ?? name).trim();
+          final existing =
+              await db.savedItemDao.findByName(widget.userId, saveName);
+          if (existing != null) await db.savedItemDao.softDelete(existing);
+          final v = _valuesOf(i);
+          await db.savedItemDao.insertItem(SavedItemsCompanion.insert(
+            userId: widget.userId,
+            name: saveName,
+            quantity: qty,
+            unit: i.unit,
+            calories: Value(v.calories),
+            proteinG: Value(v.proteinG),
+            carbsG: Value(v.carbsG),
+            fatsG: Value(v.fatsG),
+            fiberG: Value(v.fiberG),
+            addedSugarG: Value(v.addedSugarG),
+            fruitCups: Value(v.fruitCups),
+            veggieCups: Value(v.veggieCups),
+          ));
+        }
+      }
+    });
     if (!mounted) return;
     Navigator.of(context).pop();
   }
@@ -389,8 +641,10 @@ class _EntryScreenState extends State<EntryScreen> {
     final kcal = item.calCtl.text.trim();
     final name = item.nameCtl.text.trim();
     final summary = [
+      if (item.status != 'Resolving…') item.source.label,
       '${item.qtyCtl.text.trim()} ${item.unit.name}',
       if (kcal.isNotEmpty && kcal != '0') '$kcal kcal',
+      if (item.saveToLibrary) '→ library',
       if (item.status != null) item.status!,
     ].join('  ·  ');
 
@@ -455,6 +709,9 @@ class _EntryScreenState extends State<EntryScreen> {
               const SizedBox(width: 8),
               Expanded(
                 child: DropdownButtonFormField<FoodUnit>(
+                  // keyed on unit so a saved/cache fill that changes the unit
+                  // (no-qty base portion, G4 mismatch) re-renders the field
+                  key: ValueKey('${identityHashCode(item)}-${item.unit.name}'),
                   initialValue: item.unit,
                   decoration: const InputDecoration(
                     labelText: 'Unit',
@@ -492,18 +749,45 @@ class _EntryScreenState extends State<EntryScreen> {
             ),
           ],
           const SizedBox(height: 8),
-          _pair(item.calCtl, 'Calories', 'kcal', item.proteinCtl, 'Protein',
-              'g'),
-          _pair(item.carbsCtl, 'Carbs', 'g', item.fatsCtl, 'Fats', 'g'),
-          _pair(item.fiberCtl, 'Fiber', 'g', item.sugarCtl, 'Added sugar', 'g'),
-          _pair(item.fruitCtl, 'Fruit', 'cups', item.veggieCtl, 'Veggies',
-              'cups'),
+          _pair(item, item.calCtl, 'Calories', 'kcal', item.proteinCtl,
+              'Protein', 'g'),
+          _pair(item, item.carbsCtl, 'Carbs', 'g', item.fatsCtl, 'Fats', 'g'),
+          _pair(item, item.fiberCtl, 'Fiber', 'g', item.sugarCtl,
+              'Added sugar', 'g'),
+          _pair(item, item.fruitCtl, 'Fruit', 'cups', item.veggieCtl,
+              'Veggies', 'cups'),
+          // D5: an edited Frequent card offers one-tap promotion (never auto).
+          if (item.source == ItemSource.frequent &&
+              item.valuesEdited &&
+              !item.saveToLibrary)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () => _markSave(item),
+                icon: const Icon(Icons.bookmark_add_outlined),
+                label: const Text('Save to library?'),
+              ),
+            ),
+          CheckboxListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            controlAffinity: ListTileControlAffinity.leading,
+            title: const Text('Save to library'),
+            subtitle: item.saveToLibrary
+                ? Text('as "${item.saveName}"'
+                    '${item.replaces != null ? ' · replaces existing' : ''}')
+                : null,
+            value: item.saveToLibrary,
+            onChanged: (v) =>
+                v == true ? _markSave(item) : _unmarkSave(item),
+          ),
         ],
       ),
     );
   }
 
   Widget _pair(
+    DraftItem item,
     TextEditingController a,
     String aLabel,
     String aUnit,
@@ -515,14 +799,16 @@ class _EntryScreenState extends State<EntryScreen> {
         padding: const EdgeInsets.symmetric(vertical: 4),
         child: Row(
           children: [
-            Expanded(child: _num(a, aLabel, aUnit)),
+            Expanded(child: _num(item, a, aLabel, aUnit)),
             const SizedBox(width: 8),
-            Expanded(child: _num(b, bLabel, bUnit)),
+            Expanded(child: _num(item, b, bLabel, bUnit)),
           ],
         ),
       );
 
-  Widget _num(TextEditingController c, String label, String unit) => TextField(
+  Widget _num(DraftItem item, TextEditingController c, String label,
+          String unit) =>
+      TextField(
         controller: c,
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
         decoration: InputDecoration(
@@ -531,6 +817,62 @@ class _EntryScreenState extends State<EntryScreen> {
           border: const OutlineInputBorder(),
           isDense: true,
         ),
-        onChanged: (_) => setState(() {}),
+        onChanged: (_) => setState(() => item.valuesEdited = true),
       );
+}
+
+/// "Save to library" name dialog (Stage 4d). Owns its TextEditingController
+/// so it lives exactly as long as the dialog, exit animation included.
+class _SaveNameDialog extends StatefulWidget {
+  final String initial;
+  const _SaveNameDialog({required this.initial});
+
+  @override
+  State<_SaveNameDialog> createState() => _SaveNameDialogState();
+}
+
+class _SaveNameDialogState extends State<_SaveNameDialog> {
+  late final _ctl = TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _ctl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Save to library'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: _ctl,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: 'Name',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Saves on commit with this card\'s quantity and values.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _ctl.text),
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
 }

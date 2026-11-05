@@ -8,6 +8,8 @@ import 'tables.dart';
 import 'daos/user_dao.dart';
 import 'daos/per_user_targets_dao.dart';
 import 'daos/food_entry_dao.dart';
+import 'daos/saved_item_dao.dart';
+import 'daos/lookup_cache_dao.dart';
 
 part 'app_database.g.dart';
 
@@ -19,7 +21,10 @@ part 'app_database.g.dart';
     SavedItems, LookupCacheEntries,
     OutboxEntries,
   ],
-  daos: [UserDao, PerUserTargetsDao, FoodEntryDao],
+  daos: [
+    UserDao, PerUserTargetsDao, FoodEntryDao,
+    SavedItemDao, LookupCacheDao,
+  ],
 )
 class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor])

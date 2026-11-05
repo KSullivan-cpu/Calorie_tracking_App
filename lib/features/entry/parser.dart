@@ -5,7 +5,16 @@ class ParsedItem {
   final String name;
   final double qty;
   final FoodUnit unit;
-  const ParsedItem({required this.name, required this.qty, required this.unit});
+
+  /// False when no quantity was typed (no number, no "a/an"). Saved/cache
+  /// matches then use the item's base portion (Slice 2 FSD §3.1).
+  final bool hasQty;
+  const ParsedItem({
+    required this.name,
+    required this.qty,
+    required this.unit,
+    this.hasQty = true,
+  });
 }
 
 /// Split a comma-delimited string into parsed items. Empty names are dropped.
@@ -39,6 +48,7 @@ ParsedItem _parseOne(String raw) {
   var s = original;
   double qty = 1;
   FoodUnit unit = FoodUnit.item;
+  var hasQty = true;
 
   final a = _aPrefix.firstMatch(s);
   if (a != null) {
@@ -65,10 +75,11 @@ ParsedItem _parseOne(String raw) {
       }
     }
     // no leading number -> qty 1, item, whole string is the name
+    if (m == null) hasQty = false;
   }
 
   final name = _stripLeadingFiller(s.trim());
-  return ParsedItem(name: name, qty: qty, unit: unit);
+  return ParsedItem(name: name, qty: qty, unit: unit, hasQty: hasQty);
 }
 
 class _UnitToken {
