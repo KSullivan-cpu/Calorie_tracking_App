@@ -3,6 +3,7 @@ import 'package:drift/drift.dart' show Value;
 
 import 'package:calorie_tracking_app/core/bootstrap.dart';
 import 'package:calorie_tracking_app/data/app_database.dart';
+import 'package:calorie_tracking_app/features/library/saved_items_list.dart';
 
 // Atwater factors for the B1 %-to-grams derivation (mirrors onboarding).
 const double _kcalPerGramCarbs = 4;
@@ -239,6 +240,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
           FilledButton(
             onPressed: _saving ? null : _save,
             child: Text(_saving ? 'Saving…' : 'Save'),
+          ),
+          const SizedBox(height: 24),
+          const Divider(),
+          // Slice 2 FSD §3.2/§3.5: saved-items list in delete mode.
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.menu_book_outlined),
+            title: const Text('Saved items'),
+            subtitle: const Text('View and delete items in your library'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () =>
+                SavedItemsList.openManage(context, userId: widget.userId),
           ),
         ],
       ),

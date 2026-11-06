@@ -1,4 +1,5 @@
 import 'package:drift/drift.dart';
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import '../app_database.dart';
 import '../enums.dart';
 import '../name_key.dart';
@@ -31,7 +32,14 @@ class LookupCacheDao extends DatabaseAccessor<AppDatabase>
   LookupCacheDao(super.db);
 
   /// Cache bound (FSD §10 tunable, ~50). Tune in Phase 4.
-  static const cacheBound = 50;
+  static const _defaultBound = 50;
+
+  /// Debug-only test hook for criterion 5 (eviction): run with
+  /// `--dart-define=CACHE_BOUND=3`. Ignored in release builds.
+  static const _boundOverride = int.fromEnvironment('CACHE_BOUND');
+
+  static int get cacheBound =>
+      kDebugMode && _boundOverride > 0 ? _boundOverride : _defaultBound;
 
   SimpleSelectStatement<$LookupCacheEntriesTable, LookupCacheEntry> _ranked(
           String userId) =>
@@ -140,12 +148,15 @@ class LookupCacheDao extends DatabaseAccessor<AppDatabase>
   }
 
   /// Keep the top [cacheBound] by (use_count, last_used_at); hard-delete rest.
-  Future<void> _evict(String userId) => customUpdate(
-        'DELETE FROM lookup_cache_entries WHERE user_id = ?1 AND id NOT IN ('
-        'SELECT id FROM lookup_cache_entries WHERE user_id = ?1 '
-        'ORDER BY use_count DESC, last_used_at DESC LIMIT ?2)',
-        variables: [Variable.withString(userId), Variable.withInt(cacheBound)],
-        updates: {lookupCacheEntries},
-        updateKind: UpdateKind.delete,
-      );
+  Future<void> _evict(String userId) async {
+    final n = await customUpdate(
+      'DELETE FROM lookup_cache_entries WHERE user_id = ?1 AND id NOT IN ('
+      'SELECT id FROM lookup_cache_entries WHERE user_id = ?1 '
+      'ORDER BY use_count DESC, last_used_at DESC LIMIT ?2)',
+      variables: [Variable.withString(userId), Variable.withInt(cacheBound)],
+      updates: {lookupCacheEntries},
+      updateKind: UpdateKind.delete,
+    );
+    if (n > 0) debugPrint('Cache: evicted $n row(s) (bound $cacheBound)');
+  }
 }

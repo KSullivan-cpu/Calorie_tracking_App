@@ -14,6 +14,9 @@ import 'package:calorie_tracking_app/features/entry/draft_item.dart';
 import 'package:calorie_tracking_app/features/entry/item_resolver.dart';
 import 'package:calorie_tracking_app/features/entry/meal_time.dart';
 import 'package:calorie_tracking_app/features/entry/parser.dart';
+import 'package:calorie_tracking_app/features/library/frequent_items_screen.dart';
+import 'package:calorie_tracking_app/features/library/save_to_library.dart';
+import 'package:calorie_tracking_app/features/library/saved_items_list.dart';
 
 /// Stage 2d entry: comma batch -> editable review list, with a persistent
 /// impact panel + commit pinned at the bottom. The panel shows the *projected*
@@ -221,31 +224,18 @@ class _EntryScreenState extends State<EntryScreen> {
   /// Name dialog → duplicate check → "Replace?". Marks the card; nothing is
   /// written until commit. "No" on Replace returns to the name field.
   Future<void> _markSave(DraftItem item) async {
-    var name = item.saveName ?? item.nameCtl.text.trim();
-    while (true) {
-      final entered = await _askSaveName(name);
-      if (entered == null || entered.trim().isEmpty) return; // cancelled
-      name = entered.trim();
-      final existing =
-          await db.savedItemDao.findByName(widget.userId, name);
-      if (existing == null) {
-        setState(() {
-          item.saveToLibrary = true;
-          item.saveName = name;
-          item.replaces = null;
-        });
-        return;
-      }
-      if (await _askReplace(existing) == true) {
-        setState(() {
-          item.saveToLibrary = true;
-          item.saveName = name;
-          item.replaces = existing;
-        });
-        return;
-      }
-      // No -> back to the name field (rename or cancel)
-    }
+    final t = await chooseSaveTarget(
+      context,
+      userId: widget.userId,
+      initialName: item.saveName ?? item.nameCtl.text.trim(),
+      hint: 'Saves on commit with this card\'s quantity and values.',
+    );
+    if (t == null || !mounted) return;
+    setState(() {
+      item.saveToLibrary = true;
+      item.saveName = t.name;
+      item.replaces = t.replaces;
+    });
   }
 
   void _unmarkSave(DraftItem item) => setState(() {
@@ -253,36 +243,6 @@ class _EntryScreenState extends State<EntryScreen> {
         item.saveName = null;
         item.replaces = null;
       });
-
-  // The dialog owns its controller (disposed when the dialog's State is torn
-  // down, AFTER the exit animation) — disposing it right after showDialog
-  // returned crashed the still-animating TextField.
-  Future<String?> _askSaveName(String initial) => showDialog<String>(
-        context: context,
-        builder: (_) => _SaveNameDialog(initial: initial),
-      );
-
-  Future<bool?> _askReplace(SavedItem existing) => showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Replace?'),
-          content: Text(
-            'Your library already has "${existing.name}" '
-            '(${_fmt(existing.quantity)} ${existing.unit.name} · '
-            '${_fmt(existing.calories)} kcal). Replace it?',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('No'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Replace'),
-            ),
-          ],
-        ),
-      );
 
   /// Parse-time resolve runs the full tier order. A user-initiated 🔍 re-search
   /// ([preserveOnFailure]) goes straight to FDC — it's an explicit "look this
@@ -404,6 +364,36 @@ class _EntryScreenState extends State<EntryScreen> {
 
   void _addItem() => setState(() => _items.add(DraftItem()));
 
+  /// 4e pick mode: a picked saved item lands as a normal card at its base
+  /// portion (FSD §3.1) — fully adjustable, part of Commit-all. Picking the
+  /// same item twice adds two cards.
+  void _addSaved(SavedItem s) {
+    final d = DraftItem(unit: s.unit, initiallyExpanded: false);
+    d.nameCtl.text = s.name;
+    d.hasQty = false; // -> base portion
+    _fillFromStored(d,
+        baseQty: s.quantity,
+        baseUnit: s.unit,
+        v: PortionValues(
+          calories: s.calories,
+          proteinG: s.proteinG,
+          carbsG: s.carbsG,
+          fatsG: s.fatsG,
+          fiberG: s.fiberG,
+          addedSugarG: s.addedSugarG,
+          fruitCups: s.fruitCups,
+          veggieCups: s.veggieCups,
+        ),
+        source: ItemSource.saved);
+    setState(() => _items.add(d));
+  }
+
+  Future<void> _pickFromLibrary() => SavedItemsList.showPickSheet(
+        context,
+        userId: widget.userId,
+        onPick: _addSaved,
+      );
+
   void _removeItem(DraftItem item) {
     setState(() => _items.remove(item));
     item.dispose();
@@ -503,7 +493,23 @@ class _EntryScreenState extends State<EntryScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Log food')),
+      appBar: AppBar(
+        title: const Text('Log food'),
+        actions: [
+          IconButton(
+            tooltip: 'Saved items',
+            icon: const Icon(Icons.menu_book_outlined),
+            onPressed: _pickFromLibrary,
+          ),
+          IconButton(
+            tooltip: 'Frequent items',
+            icon: const Icon(Icons.history),
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+              builder: (_) => FrequentItemsScreen(userId: widget.userId),
+            )),
+          ),
+        ],
+      ),
       body: Column(
         children: [
           Padding(
@@ -821,58 +827,4 @@ class _EntryScreenState extends State<EntryScreen> {
       );
 }
 
-/// "Save to library" name dialog (Stage 4d). Owns its TextEditingController
-/// so it lives exactly as long as the dialog, exit animation included.
-class _SaveNameDialog extends StatefulWidget {
-  final String initial;
-  const _SaveNameDialog({required this.initial});
-
-  @override
-  State<_SaveNameDialog> createState() => _SaveNameDialogState();
-}
-
-class _SaveNameDialogState extends State<_SaveNameDialog> {
-  late final _ctl = TextEditingController(text: widget.initial);
-
-  @override
-  void dispose() {
-    _ctl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Save to library'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          TextField(
-            controller: _ctl,
-            autofocus: true,
-            decoration: const InputDecoration(
-              labelText: 'Name',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Saves on commit with this card\'s quantity and values.',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.pop(context, _ctl.text),
-          child: const Text('Save'),
-        ),
-      ],
-    );
-  }
-}
+// "Save to library" name dialog moved to library/save_to_library.dart (4f).
