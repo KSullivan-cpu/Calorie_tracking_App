@@ -156,6 +156,13 @@ class Drain {
           .getSingle())
       .read<int>('n');
 
+  /// Live pending-backup count (Stage 5c Needs-attention backup item).
+  static Stream<int> watchPendingCount() => db
+      .customSelect('SELECT COUNT(*) AS n FROM outbox_entries',
+          readsFrom: {db.outboxEntries})
+      .watchSingle()
+      .map((row) => row.read<int>('n'));
+
   /// Device has a network interface up. Not proof the internet is reachable —
   /// a failed send is simply a normal (transient) failure.
   static Future<bool> isOnline() async =>

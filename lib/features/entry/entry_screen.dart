@@ -8,8 +8,10 @@ import 'package:calorie_tracking_app/data/daos/lookup_cache_dao.dart'
 import 'package:calorie_tracking_app/data/enums.dart';
 import 'package:calorie_tracking_app/data/lookup/fdc_provider.dart';
 import 'package:calorie_tracking_app/data/lookup/lookup_provider.dart';
+import 'package:calorie_tracking_app/data/sync/drain.dart' show Drain;
 import 'package:calorie_tracking_app/features/dashboard/day_totals.dart';
 import 'package:calorie_tracking_app/features/dashboard/metric_bar.dart';
+import 'package:calorie_tracking_app/features/dashboard/unverified_note.dart';
 import 'package:calorie_tracking_app/features/entry/draft_item.dart';
 import 'package:calorie_tracking_app/features/entry/item_resolver.dart';
 import 'package:calorie_tracking_app/features/entry/meal_time.dart';
@@ -77,6 +79,7 @@ class _EntryScreenState extends State<EntryScreen> {
         fr = 0.0,
         vg = 0.0;
     for (final i in _items) {
+      if (i.logUnverified) continue; // counts as zero (FSD §3.7)
       cal += _d(i.calCtl);
       pro += _d(i.proteinCtl);
       carb += _d(i.carbsCtl);
@@ -256,14 +259,21 @@ class _EntryScreenState extends State<EntryScreen> {
     }
     final qty = double.tryParse(item.qtyCtl.text.trim()) ?? 1;
     final produceEntry = produce.match(name);
-    final candidates = await lookupCandidates(_provider, name);
+    // A3: device offline -> skip FDC entirely (instant); online but every
+    // attempt threw -> also unreachable. Judged per item.
+    final outcome = await Drain.isOnline()
+        ? await lookupCandidates(_provider, name)
+        : const LookupOutcome.unreachable();
+    final candidates = outcome.matches;
     // A user-initiated re-search (🔍) that finds nothing must not clobber a good
     // fill: keep candidates, selection, field values, and status as they were.
     if (candidates.isEmpty && preserveOnFailure) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No results — kept previous match')),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(outcome.unreachable
+              ? 'FDC unavailable — kept previous values'
+              : 'No results — kept previous match'),
+        ));
       }
       return;
     }
@@ -284,6 +294,14 @@ class _EntryScreenState extends State<EntryScreen> {
     item.cacheRow = null;
     item.unitMismatch = false;
     item.valuesEdited = false;
+    // Stage 5a: unreachable cards default to "Log as unverified" (B hybrid).
+    item.unreachable = outcome.unreachable;
+    item.logUnverified = outcome.unreachable;
+    if (outcome.unreachable) {
+      debugPrint('Lookup "$name": FDC unreachable -> unverified default');
+      item.status = 'FDC unavailable';
+      _clearValues(item); // unverified = zero; typing a value -> manual
+    }
     if (mounted) setState(() {});
   }
 
@@ -362,6 +380,24 @@ class _EntryScreenState extends State<EntryScreen> {
     setState(() {});
   }
 
+  void _clearValues(DraftItem item) {
+    for (final c in item.valueCtls) {
+      c.clear();
+    }
+  }
+
+  /// B hybrid: the switch on an unreachable card. On -> values cleared (counts
+  /// as zero) and any library save un-marked (nothing to save). Off -> manual.
+  void _setUnverified(DraftItem item, bool on) => setState(() {
+        item.logUnverified = on;
+        if (on) {
+          _clearValues(item);
+          item.saveToLibrary = false;
+          item.saveName = null;
+          item.replaces = null;
+        }
+      });
+
   void _addItem() => setState(() => _items.add(DraftItem()));
 
   /// 4e pick mode: a picked saved item lands as a normal card at its base
@@ -405,6 +441,10 @@ class _EntryScreenState extends State<EntryScreen> {
     if (valid.isEmpty) return;
 
     final ts = DateTime.now(); // shared across the batch
+    // Soft-commit (FSD §4): unverified cards write is_verified=false with all
+    // values zero; they enter the Needs-attention queue at commit (G1a).
+    double valOrZero(DraftItem i, TextEditingController c) =>
+        i.logUnverified ? 0 : _d(c);
     final companions = valid
         .map((i) => FoodEntriesCompanion.insert(
               userId: widget.userId,
@@ -413,16 +453,24 @@ class _EntryScreenState extends State<EntryScreen> {
               quantity: double.tryParse(i.qtyCtl.text.trim()) ?? 1,
               unit: i.unit,
               entryTimestamp: ts,
-              calories: Value(_d(i.calCtl)),
-              proteinG: Value(_d(i.proteinCtl)),
-              carbsG: Value(_d(i.carbsCtl)),
-              fatsG: Value(_d(i.fatsCtl)),
-              fiberG: Value(_d(i.fiberCtl)),
-              addedSugarG: Value(_d(i.sugarCtl)),
-              fruitCups: Value(_d(i.fruitCtl)),
-              veggieCups: Value(_d(i.veggieCtl)),
+              calories: Value(valOrZero(i, i.calCtl)),
+              proteinG: Value(valOrZero(i, i.proteinCtl)),
+              carbsG: Value(valOrZero(i, i.carbsCtl)),
+              fatsG: Value(valOrZero(i, i.fatsCtl)),
+              fiberG: Value(valOrZero(i, i.fiberCtl)),
+              addedSugarG: Value(valOrZero(i, i.sugarCtl)),
+              fruitCups: Value(valOrZero(i, i.fruitCtl)),
+              veggieCups: Value(valOrZero(i, i.veggieCtl)),
+              isVerified: Value(!i.logUnverified),
             ))
         .toList();
+    final nUnverified = valid.where((i) => i.logUnverified).length;
+    for (final i in valid) {
+      debugPrint('Commit item "${i.nameCtl.text.trim()}": '
+          'source=${i.source.name} unreachable=${i.unreachable} '
+          'logUnverified=${i.logUnverified}');
+    }
+    debugPrint('Commit: ${valid.length} item(s), $nUnverified soft-committed');
 
     setState(() => _saving = true);
     // One transaction: entries (+ outbox) and cache writes (FSD §4 "On
@@ -430,6 +478,7 @@ class _EntryScreenState extends State<EntryScreen> {
     await db.transaction(() async {
       await db.foodEntryDao.insertEntries(companions);
       for (final i in valid) {
+        if (i.logUnverified) continue; // never cached or saved (G6)
         final name = i.nameCtl.text.trim();
         final qty = double.tryParse(i.qtyCtl.text.trim()) ?? 1;
         switch (i.source) {
@@ -608,6 +657,9 @@ class _EntryScreenState extends State<EntryScreen> {
             final projected =
                 addDayTotals(sumEntries(committed), _draftTotals());
             final rows = buildMetricRowsFromTotals(projected, targets);
+            final nUnverified =
+                committed.where((e) => !e.isVerified).length +
+                    _items.where((i) => i.logUnverified).length;
             return Container(
               decoration: BoxDecoration(
                 color: Theme.of(context).colorScheme.surface,
@@ -622,6 +674,8 @@ class _EntryScreenState extends State<EntryScreen> {
                 children: [
                   Text('Projected today',
                       style: Theme.of(context).textTheme.labelMedium),
+                  if (nUnverified > 0)
+                    UnverifiedNote(count: nUnverified),
                   const SizedBox(height: 4),
                   if (rows.isEmpty)
                     Text('No tracked metrics',
@@ -649,7 +703,10 @@ class _EntryScreenState extends State<EntryScreen> {
     final summary = [
       if (item.status != 'Resolving…') item.source.label,
       '${item.qtyCtl.text.trim()} ${item.unit.name}',
-      if (kcal.isNotEmpty && kcal != '0') '$kcal kcal',
+      if (item.logUnverified)
+        'Unverified — not counted'
+      else if (kcal.isNotEmpty && kcal != '0')
+        '$kcal kcal',
       if (item.saveToLibrary) '→ library',
       if (item.status != null) item.status!,
     ].join('  ·  ');
@@ -774,6 +831,19 @@ class _EntryScreenState extends State<EntryScreen> {
                 label: const Text('Save to library?'),
               ),
             ),
+          // B hybrid: soft-commit choice, only on unreachable cards (FSD §4).
+          if (item.unreachable)
+            SwitchListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Log as unverified'),
+              subtitle: Text(item.logUnverified
+                  ? 'Counted as zero until you review it in Needs attention'
+                  : 'Logging the values you entered'),
+              value: item.logUnverified,
+              onChanged: (on) => _setUnverified(item, on),
+            ),
+          if (!item.logUnverified)
           CheckboxListTile(
             dense: true,
             contentPadding: EdgeInsets.zero,
@@ -823,7 +893,13 @@ class _EntryScreenState extends State<EntryScreen> {
           border: const OutlineInputBorder(),
           isDense: true,
         ),
-        onChanged: (_) => setState(() => item.valuesEdited = true),
+        onChanged: (t) => setState(() {
+          item.valuesEdited = true;
+          // B hybrid: typing a value = manual entry -> switch off.
+          if (item.logUnverified && t.trim().isNotEmpty) {
+            item.logUnverified = false;
+          }
+        }),
       );
 }
 

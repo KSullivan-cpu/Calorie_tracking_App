@@ -62,6 +62,17 @@ class DraftItem {
   String? saveName;
   SavedItem? replaces;
 
+  // --- Slice 2 (Stage 5) ---
+
+  /// The online lookup for this card couldn't reach FDC (A3; per item).
+  /// Soft-commit is offered only on these cards (FSD §4).
+  bool unreachable = false;
+
+  /// "Log as unverified" switch (B hybrid). Defaults on for an unreachable
+  /// card; typing a nutrient value turns it off (= manual entry). Commits as
+  /// `is_verified=false` with zero values (Stage 5b).
+  bool logUnverified = false;
+
   DraftItem({this.unit = FoodUnit.item, this.initiallyExpanded = true})
       : candidates = const [],
         selectedIndex = -1,

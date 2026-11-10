@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 
 import 'package:calorie_tracking_app/core/bootstrap.dart';
 import 'package:calorie_tracking_app/data/app_database.dart';
+import 'package:calorie_tracking_app/features/attention/needs_attention.dart';
 import 'package:calorie_tracking_app/features/dashboard/day_totals.dart';
 import 'package:calorie_tracking_app/features/dashboard/metric_bar.dart';
+import 'package:calorie_tracking_app/features/dashboard/unverified_note.dart';
 import 'package:calorie_tracking_app/features/entry/entry_screen.dart';
 import 'package:calorie_tracking_app/features/settings/settings_screen.dart';
 
@@ -25,6 +27,7 @@ class DashboardScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Today'),
         actions: [
+          NeedsAttentionBadge(userId: userId),
           IconButton(
             tooltip: 'Settings',
             icon: const Icon(Icons.settings),
@@ -66,6 +69,8 @@ class DashboardScreen extends StatelessWidget {
                   ),
                 );
               }
+              final nUnverified =
+                  entrySnap.data!.where((e) => !e.isVerified).length;
               final buildUp =
                   rows.where((r) => r.kind == MetricKind.buildUp).toList();
               final stayUnder =
@@ -73,6 +78,10 @@ class DashboardScreen extends StatelessWidget {
               return ListView(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
                 children: [
+                  if (nUnverified > 0) ...[
+                    UnverifiedNote(count: nUnverified),
+                    const SizedBox(height: 12),
+                  ],
                   if (buildUp.isNotEmpty) ...[
                     _header('Build up to'),
                     ...buildUp.map(MetricBar.new),

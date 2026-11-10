@@ -5,27 +5,51 @@ import 'package:calorie_tracking_app/data/lookup/portion_scaler.dart';
 import 'package:calorie_tracking_app/data/produce/produce_entry.dart';
 import 'package:calorie_tracking_app/data/produce/produce_reference.dart';
 
-/// Search candidates for [name]; transport failures collapse to "no match".
-/// If the query returns nothing, retry once with a singular form, since FDC is
-/// literal about plurals ("egg whites" -> 0, "egg white" -> results).
-Future<List<FoodMatch>> lookupCandidates(
+/// Result of an online lookup (Slice 2 Stage 5a, decision A3).
+///
+/// [unreachable] = the source could not be asked (device offline, or every
+/// attempt threw — timeout, transport error, repeated HTTP 400). Only then is
+/// soft-commit offered (FSD §4). A completed search with no results is a plain
+/// no-match (Manual, as in Slice 1). Judged per item.
+class LookupOutcome {
+  final List<FoodMatch> matches;
+  final bool unreachable;
+  const LookupOutcome(this.matches) : unreachable = false;
+  const LookupOutcome.unreachable()
+      : matches = const [],
+        unreachable = true;
+}
+
+/// Search candidates for [name]. If the query returns nothing usable, retry
+/// once with a singular form, since FDC is literal about plurals ("egg whites"
+/// -> 0, "egg white" -> results).
+///
+/// A throw on the first search = unreachable. A throw on the singular retry
+/// keeps the first search's results if it had any; otherwise unreachable (the
+/// lookup never completed).
+Future<LookupOutcome> lookupCandidates(
   LookupProvider provider,
   String name,
 ) async {
+  List<FoodMatch> results;
   try {
-    var results = await provider.search(name);
-    final unusable = results.isEmpty || results.first.caloriesPer100g == 0;
-    if (unusable) {
-      final singular = _singularize(name);
-      if (singular != name.trim()) {
+    results = await provider.search(name);
+  } catch (_) {
+    return const LookupOutcome.unreachable();
+  }
+  final unusable = results.isEmpty || results.first.caloriesPer100g == 0;
+  if (unusable) {
+    final singular = _singularize(name);
+    if (singular != name.trim()) {
+      try {
         final alt = await provider.search(singular);
         if (alt.isNotEmpty && alt.first.caloriesPer100g > 0) results = alt;
+      } catch (_) {
+        if (results.isEmpty) return const LookupOutcome.unreachable();
       }
     }
-    return results;
-  } catch (_) {
-    return const [];
   }
+  return LookupOutcome(results);
 }
 
 String _singularize(String s) {

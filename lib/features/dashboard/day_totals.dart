@@ -60,6 +60,7 @@ DayTotals sumEntries(List<FoodEntry> entries) {
       fruit = 0.0,
       veg = 0.0;
   for (final e in entries) {
+    if (!e.isVerified) continue; // unverified counts as zero (FSD §3.7)
     cal += e.calories;
     pro += e.proteinG;
     carb += e.carbsG;
