@@ -1,6 +1,9 @@
 ﻿import 'dart:async' show unawaited;
 
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart'
+    show Supabase, SignOutScope;
 
 import 'core/bootstrap.dart';
 import 'data/sync/backup_link.dart';
@@ -27,6 +30,15 @@ Future<void> main() async {
   await BackupLink.load();
   // 6b: watch auth so a tapped magic link flips pending -> linked.
   BackupLink.startListening();
+  // Debug-only test hook (Stage 6c, criterion 10 re-link path): run with
+  // `--dart-define=FORCE_SIGN_OUT=1` to drop the local session at launch so
+  // the drain hits a real auth failure. Ignored in release builds.
+  if (kDebugMode &&
+      cloudConfigured &&
+      const String.fromEnvironment('FORCE_SIGN_OUT') == '1') {
+    await Supabase.instance.client.auth.signOut(scope: SignOutScope.local);
+    debugPrint('DEBUG FORCE_SIGN_OUT: local session cleared');
+  }
 
   // Resolve the single implicit user, then decide the landing screen once.
   // No targets row yet  -> onboarding;  row exists (even all-null) -> dashboard.

@@ -1,11 +1,14 @@
 import 'dart:async' show StreamSubscription, unawaited;
 
-import 'package:flutter/foundation.dart' show ValueNotifier, debugPrint;
+import 'package:flutter/foundation.dart'
+    show ValueNotifier, debugPrint, kDebugMode;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../../core/bootstrap.dart' show cloudConfigured;
+import '../../core/bootstrap.dart' show cloudConfigured, db;
 import 'drain.dart';
+import 'reconciliation.dart';
+import 'sync_triggers.dart';
 
 /// Optional email-link status (Slice 2 FSD §3.5, §5.4). App-local (FSD §6.7)
 /// — shared_preferences, mirroring [SyncHealth].
@@ -20,6 +23,16 @@ import 'drain.dart';
 ///   deep link (supabase_flutter exchanges it) → auth-state listener → *linked*.
 /// - "Email taken" (`email_exists`) is treated as "this email has an existing
 ///   backup" (CG-2) → restore-or-cancel prompt. Stage 7 confirms data exists.
+///
+/// Stage 6c decisions (2026-11-11):
+/// - Nudge: shown while not linked and not dismissed; tap OR ✕ dismisses
+///   permanently (`backup_nudge_dismissed_v1`); tap opens the link flow.
+/// - Re-secure (auth escalation): linked → magic-link sign-in to the linked
+///   email (`shouldCreateUser: false`) → same identity → drain → escalation
+///   clears. Not linked → unrecoverable identity; explain, never mint a new one
+///   (open thread).
+/// - Identity guard: any sign-in whose uid ≠ the local user id is refused
+///   (signed out) so data is never written under another identity.
 enum LinkState { none, pending, linked }
 
 class LinkStatus {
@@ -31,6 +44,8 @@ class LinkStatus {
 }
 
 enum LinkRequestResult { sent, existingBackup, offline, noSession, failed }
+
+enum ReSecureResult { sent, notLinked, offline, failed }
 
 class LinkRequestOutcome {
   final LinkRequestResult result;
@@ -45,6 +60,24 @@ class BackupLink {
 
   static const _stateKey = 'link_status_v1';
   static const _emailKey = 'link_email_v1';
+  static const _nudgeKey = 'backup_nudge_dismissed_v1';
+
+  /// Debug-only test hook (Stage 6c, criterion 11 nudge): run with
+  /// `--dart-define=DEBUG_UNLINK=1` to treat this run as not linked (in
+  /// memory only; prefs and the Supabase identity are untouched). Ignored in
+  /// release builds.
+  static const _debugUnlink =
+      kDebugMode && String.fromEnvironment('DEBUG_UNLINK') == '1';
+
+  /// Dashboard nudge dismissed (FSD §3.7; permanent).
+  static final ValueNotifier<bool> nudgeDismissed = ValueNotifier(false);
+
+  static Future<void> dismissNudge() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_nudgeKey, true);
+    nudgeDismissed.value = true;
+    debugPrint('BackupLink: nudge dismissed');
+  }
 
   /// Live link status for Settings → Backup (and the 6c nudge).
   static final ValueNotifier<LinkStatus> status =
@@ -60,6 +93,11 @@ class BackupLink {
       orElse: () => LinkState.none,
     );
     status.value = LinkStatus(state, prefs.getString(_emailKey));
+    nudgeDismissed.value = prefs.getBool(_nudgeKey) ?? false;
+    if (_debugUnlink) {
+      status.value = LinkStatus.notLinked;
+      debugPrint('DEBUG_UNLINK: treating this run as not linked');
+    }
   }
 
   /// Persist a new status.
@@ -82,13 +120,57 @@ class BackupLink {
     if (!cloudConfigured || _authSub != null) return;
     final auth = Supabase.instance.client.auth;
     _authSub = auth.onAuthStateChange.listen(
-      (s) => unawaited(_syncFromUser(s.session?.user ?? auth.currentUser)),
+      (s) => unawaited(_onAuth(s, auth)),
       onError: (Object e) => debugPrint('BackupLink: auth stream error: $e'),
     );
     unawaited(_syncFromUser(auth.currentUser));
     // Pending from an earlier run: the link may have been confirmed while the
     // app was closed (or on another device). Refresh once to pick that up.
     if (status.value.state == LinkState.pending) unawaited(_refreshPending());
+  }
+
+  static Future<void> _onAuth(AuthState s, GoTrueClient auth) async {
+    final user = s.session?.user ?? auth.currentUser;
+    // Pre-reconciliation the local id is still the temporary local uid (the
+    // first anonymous sign-in is SUPPOSED to differ) — guard only after.
+    if (s.event == AuthChangeEvent.signedIn &&
+        user != null &&
+        await Reconciliation.isReconciled()) {
+      final local = await db.userDao.getUser();
+      if (local != null && local.id != user.id) {
+        // Never let backup write under a different identity.
+        debugPrint('BackupLink: sign-in landed on ${user.id}, expected '
+            '${local.id} — REFUSED (signed out)');
+        await auth.signOut(scope: SignOutScope.local);
+        return;
+      }
+      debugPrint('BackupLink: signed in as ${user.id} (matches local user)');
+      unawaited(SyncTriggers.runNow('resecure'));
+    }
+    await _syncFromUser(user);
+  }
+
+  /// Re-secure backup (FSD §5.4 re-link reuse; LG-2 auth recovery).
+  static Future<ReSecureResult> reSecure() async {
+    final cur = status.value;
+    final email = cur.email;
+    if (cur.state != LinkState.linked || email == null) {
+      return ReSecureResult.notLinked;
+    }
+    if (!cloudConfigured) return ReSecureResult.failed;
+    if (!await Drain.isOnline()) return ReSecureResult.offline;
+    try {
+      await Supabase.instance.client.auth.signInWithOtp(
+        email: email,
+        shouldCreateUser: false,
+        emailRedirectTo: redirectUrl,
+      );
+      debugPrint('BackupLink: re-secure link sent to $email');
+      return ReSecureResult.sent;
+    } catch (e) {
+      debugPrint('BackupLink: re-secure failed: $e');
+      return ReSecureResult.failed;
+    }
   }
 
   static Future<void> _refreshPending() async {
@@ -103,6 +185,7 @@ class BackupLink {
   }
 
   static Future<void> _syncFromUser(User? u) async {
+    if (_debugUnlink) return;
     final email = u?.email;
     if (u == null || email == null || email.isEmpty) return;
     if (u.emailConfirmedAt == null) return;

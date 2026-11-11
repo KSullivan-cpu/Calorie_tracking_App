@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'package:calorie_tracking_app/core/bootstrap.dart';
 import 'package:calorie_tracking_app/data/app_database.dart';
+import 'package:calorie_tracking_app/data/sync/backup_link.dart';
 import 'package:calorie_tracking_app/data/sync/drain.dart' show Drain;
 import 'package:calorie_tracking_app/data/sync/sync_health.dart';
 import 'package:calorie_tracking_app/data/sync/sync_triggers.dart';
@@ -177,6 +178,43 @@ class _BackupItem extends StatefulWidget {
 class _BackupItemState extends State<_BackupItem> {
   late final Stream<int> _pending = Drain.watchPendingCount();
 
+  Future<void> _reSecure(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final out = await BackupLink.reSecure();
+    if (!context.mounted) return;
+    switch (out) {
+      case ReSecureResult.sent:
+        messenger.showSnackBar(SnackBar(
+            content: Text('Sign-in link sent to '
+                '${BackupLink.status.value.email}. Tap it to re-secure '
+                'your backup.')));
+      case ReSecureResult.offline:
+        messenger.showSnackBar(const SnackBar(
+            content: Text('You\'re offline. Try again when you\'re back '
+                'online.')));
+      case ReSecureResult.failed:
+        messenger.showSnackBar(const SnackBar(
+            content: Text('Couldn\'t send the sign-in link. Try again '
+                'later.')));
+      case ReSecureResult.notLinked:
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Can\'t re-secure this backup'),
+            content: const Text('No email was linked, so the backup\'s '
+                'sign-in can\'t be recovered. Your data is safe on this '
+                'phone and nothing has been lost here.'),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isAuth = widget.esc == SyncEscalation.auth;
@@ -195,9 +233,10 @@ class _BackupItemState extends State<_BackupItem> {
           subtitle: Text('$reason\n$pending waiting to back up'),
           isThreeLine: true,
           trailing: isAuth
-              // Re-link flow is Stage 6 (FSD §5.4); shown disabled until then.
-              ? const OutlinedButton(
-                  onPressed: null, child: Text('Re-secure backup'))
+              // Stage 6c: re-link via the linked email (FSD §5.4).
+              ? OutlinedButton(
+                  onPressed: () => _reSecure(context),
+                  child: const Text('Re-secure backup'))
               : OutlinedButton(
                   onPressed: () async {
                     ScaffoldMessenger.of(context).showSnackBar(

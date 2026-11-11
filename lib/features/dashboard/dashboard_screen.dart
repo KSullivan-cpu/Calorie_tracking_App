@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:calorie_tracking_app/core/bootstrap.dart';
 import 'package:calorie_tracking_app/data/app_database.dart';
 import 'package:calorie_tracking_app/features/attention/needs_attention.dart';
+import 'package:calorie_tracking_app/features/dashboard/backup_nudge.dart';
 import 'package:calorie_tracking_app/features/dashboard/day_totals.dart';
 import 'package:calorie_tracking_app/features/dashboard/metric_bar.dart';
 import 'package:calorie_tracking_app/features/dashboard/unverified_note.dart';
@@ -78,6 +79,8 @@ class DashboardScreen extends StatelessWidget {
               return ListView(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
                 children: [
+                  // FSD §3.7 one-time backup nudge (Stage 6c).
+                  const BackupNudge(),
                   if (nUnverified > 0) ...[
                     UnverifiedNote(count: nUnverified),
                     const SizedBox(height: 12),
