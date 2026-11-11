@@ -25,6 +25,8 @@ Future<void> main() async {
   await SyncHealth.load();
   // Optional email-link status (FSD §3.5/§6.7) for Settings → Backup.
   await BackupLink.load();
+  // 6b: watch auth so a tapped magic link flips pending -> linked.
+  BackupLink.startListening();
 
   // Resolve the single implicit user, then decide the landing screen once.
   // No targets row yet  -> onboarding;  row exists (even all-null) -> dashboard.
