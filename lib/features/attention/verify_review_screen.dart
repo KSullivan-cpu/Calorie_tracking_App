@@ -34,6 +34,11 @@ class VerifyReviewScreen extends StatefulWidget {
 class _VerifyReviewScreenState extends State<VerifyReviewScreen> {
   final LookupProvider _provider = FdcProvider();
 
+  /// Lookup query (A, 2026-11-09): pre-filled with the logged name, editable
+  /// so a fresh lookup can search different words. Never written back — the
+  /// logged name is unchanged (verification changes values only, G8).
+  late final _query = TextEditingController(text: widget.entry.name);
+
   final _cal = TextEditingController();
   final _pro = TextEditingController();
   final _carb = TextEditingController();
@@ -70,6 +75,7 @@ class _VerifyReviewScreenState extends State<VerifyReviewScreen> {
 
   @override
   void dispose() {
+    _query.dispose();
     for (final c in _ctls) {
       c.dispose();
     }
@@ -85,7 +91,9 @@ class _VerifyReviewScreenState extends State<VerifyReviewScreen> {
       _looking = true;
       _status = 'Looking up…';
     });
-    final name = widget.entry.name;
+    final name = _query.text.trim().isEmpty
+        ? widget.entry.name
+        : _query.text.trim();
     final outcome = await Drain.isOnline()
         ? await lookupCandidates(_provider, name)
         : const LookupOutcome.unreachable();
@@ -110,7 +118,9 @@ class _VerifyReviewScreenState extends State<VerifyReviewScreen> {
     final fill = await fillForWithMeasures(
       provider: _provider,
       produceRef: produce,
-      produceEntry: produce.match(e.name),
+      produceEntry: produce.match(_query.text.trim().isEmpty
+          ? e.name
+          : _query.text.trim()),
       match: _candidates[index],
       qty: e.quantity,
       unit: e.unit,
@@ -210,6 +220,19 @@ class _VerifyReviewScreenState extends State<VerifyReviewScreen> {
             style: theme.textTheme.bodySmall,
           ),
           const SizedBox(height: 12),
+          if (_canFill) ...[
+            TextField(
+              controller: _query,
+              decoration: const InputDecoration(
+                labelText: 'Search as',
+                helperText: 'Changes the lookup only — the logged name stays',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              onSubmitted: (_) => _looking ? null : _lookup(),
+            ),
+            const SizedBox(height: 8),
+          ],
           if (_canFill)
             Row(
               children: [
