@@ -89,6 +89,35 @@ class NeedsAttentionBadge extends StatelessWidget {
       );
 }
 
+/// Settings → Backup link to the queue (FSD §3.5). Always shown; carries the
+/// count when the queue is non-empty (Stage 6a).
+class NeedsAttentionLink extends StatelessWidget {
+  final String userId;
+  const NeedsAttentionLink({super.key, required this.userId});
+
+  @override
+  Widget build(BuildContext context) => _QueueCount(
+        userId: userId,
+        builder: (context, count, _, __) => ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: count == 0
+              ? const Icon(Icons.notifications_none)
+              : Badge.count(
+                  count: count,
+                  child: const Icon(Icons.notifications_none),
+                ),
+          title: const Text('Needs attention'),
+          subtitle: Text(count == 0
+              ? 'Nothing needs attention'
+              : '$count ${count == 1 ? 'item' : 'items'}'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+            builder: (_) => NeedsAttentionScreen(userId: userId),
+          )),
+        ),
+      );
+}
+
 class NeedsAttentionScreen extends StatelessWidget {
   final String userId;
   const NeedsAttentionScreen({super.key, required this.userId});

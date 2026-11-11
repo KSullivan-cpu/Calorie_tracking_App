@@ -4,6 +4,7 @@ import 'package:drift/drift.dart' show Value;
 import 'package:calorie_tracking_app/core/bootstrap.dart';
 import 'package:calorie_tracking_app/data/app_database.dart';
 import 'package:calorie_tracking_app/features/library/saved_items_list.dart';
+import 'package:calorie_tracking_app/features/settings/backup_section.dart';
 
 // Atwater factors for the B1 %-to-grams derivation (mirrors onboarding).
 const double _kcalPerGramCarbs = 4;
@@ -253,6 +254,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onTap: () =>
                 SavedItemsList.openManage(context, userId: widget.userId),
           ),
+          const Divider(),
+          // Slice 2 FSD §3.5: Backup section (Stage 6a).
+          BackupSection(userId: widget.userId),
         ],
       ),
     );

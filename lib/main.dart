@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 
 import 'core/bootstrap.dart';
+import 'data/sync/backup_link.dart';
 import 'data/sync/reconciliation.dart';
 import 'data/sync/sync_health.dart';
 import 'data/sync/sync_triggers.dart';
@@ -22,6 +23,8 @@ Future<void> main() async {
   await Reconciliation.catchUpIfNeeded();
   // LG-2 escalation state (app-local) for Stage 5's Needs-attention queue.
   await SyncHealth.load();
+  // Optional email-link status (FSD §3.5/§6.7) for Settings → Backup.
+  await BackupLink.load();
 
   // Resolve the single implicit user, then decide the landing screen once.
   // No targets row yet  -> onboarding;  row exists (even all-null) -> dashboard.

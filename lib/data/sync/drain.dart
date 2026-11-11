@@ -1,5 +1,5 @@
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:drift/drift.dart' show Variable;
+import 'package:drift/drift.dart' show UpdateKind, Variable;
 import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -215,6 +215,12 @@ class Drain {
     });
   }
 
-  static Future<void> _dequeue(String outboxId) => db.customStatement(
-      'DELETE FROM outbox_entries WHERE id = ?', [outboxId]);
+  /// customUpdate (not customStatement) so drift notifies stream watchers —
+  /// otherwise [watchPendingCount] never re-runs after a send (found 6a).
+  static Future<void> _dequeue(String outboxId) => db.customUpdate(
+        'DELETE FROM outbox_entries WHERE id = ?',
+        variables: [Variable.withString(outboxId)],
+        updates: {db.outboxEntries},
+        updateKind: UpdateKind.delete,
+      );
 }
