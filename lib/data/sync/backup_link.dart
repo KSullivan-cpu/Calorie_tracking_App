@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/bootstrap.dart' show cloudConfigured, db;
 import 'drain.dart';
 import 'reconciliation.dart';
+import 'restore.dart';
 import 'sync_triggers.dart';
 
 /// Optional email-link status (Slice 2 FSD §3.5, §5.4). App-local (FSD §6.7)
@@ -130,6 +131,9 @@ class BackupLink {
   }
 
   static Future<void> _onAuth(AuthState s, GoTrueClient auth) async {
+    // Stage 7a: restore owns sign-ins to the backup identity while pending
+    // (guard exception) and keeps its session stash current.
+    if (await Restore.handleAuth(s)) return;
     final user = s.session?.user ?? auth.currentUser;
     // Pre-reconciliation the local id is still the temporary local uid (the
     // first anonymous sign-in is SUPPOSED to differ) — guard only after.
@@ -186,6 +190,8 @@ class BackupLink {
 
   static Future<void> _syncFromUser(User? u) async {
     if (_debugUnlink) return;
+    // Never mark the restore target's email as this device's link.
+    if (Restore.pending) return;
     final email = u?.email;
     if (u == null || email == null || email.isEmpty) return;
     if (u.emailConfirmedAt == null) return;

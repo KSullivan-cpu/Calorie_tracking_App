@@ -8,14 +8,21 @@ import 'package:supabase_flutter/supabase_flutter.dart'
 import 'core/bootstrap.dart';
 import 'data/sync/backup_link.dart';
 import 'data/sync/reconciliation.dart';
+import 'data/sync/restore.dart';
 import 'data/sync/sync_health.dart';
 import 'data/sync/sync_triggers.dart';
 import 'features/dashboard/dashboard_screen.dart';
 import 'features/onboarding/onboarding_screen.dart';
+import 'features/restore/restore_screen.dart';
 
 Future<void> main() async {
   // bootstrap(): ensureInitialized + create DB + implicit User row (UUID v7).
   await bootstrap();
+
+  // Stage 7a: restore state first — a pending restore gates reconciliation
+  // and the drain, and decides the landing screen below.
+  await Restore.load();
+  Restore.openScreen = _openRestoreScreen;
 
   // Slice 2 thin thread step 3: identity rewrite + outbox seed, BEFORE any
   // screen gets a userId (build decision A1). Local-only, no network; no-op
@@ -46,7 +53,16 @@ Future<void> main() async {
   final userId = user!.id;
   final targets = await db.perUserTargetsDao.getTargets(userId);
 
-  runApp(CalorieApp(userId: userId, hasTargets: targets != null));
+  runApp(CalorieApp(
+    userId: userId,
+    hasTargets: targets != null,
+    // The restore sign-in landed while the app was closed: resume the prompt.
+    restoreLanded: Restore.landed,
+  ));
+  // A link that launched the app is exchanged after startup — its signedIn
+  // event may beat the navigator; re-check once the first frame is up.
+  WidgetsBinding.instance
+      .addPostFrameCallback((_) => Restore.openIfLanded());
 
   // Stage 3: hybrid drain triggers (launch, mutation-debounced, connectivity
   // regained, foreground/background, 15-min foreground backstop). Each
@@ -55,19 +71,37 @@ Future<void> main() async {
   unawaited(SyncTriggers.start());
 }
 
+/// Push the restore prompt over whatever is showing (once).
+void _openRestoreScreen() {
+  void push() {
+    if (Restore.screenOpen) return;
+    Restore.navigatorKey.currentState
+        ?.push(MaterialPageRoute(builder: (_) => const RestoreScreen()));
+  }
+
+  if (Restore.navigatorKey.currentState != null) {
+    push();
+  } else {
+    WidgetsBinding.instance.addPostFrameCallback((_) => push());
+  }
+}
+
 class CalorieApp extends StatelessWidget {
   final String userId;
   final bool hasTargets;
+  final bool restoreLanded;
 
   const CalorieApp({
     super.key,
     required this.userId,
     required this.hasTargets,
+    this.restoreLanded = false,
   });
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: Restore.navigatorKey,
       title: 'Calorie Tracker',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
@@ -76,9 +110,11 @@ class CalorieApp extends StatelessWidget {
       ),
       // Stage 1 routing: plain Navigator. Onboarding pushReplacement -> Dashboard
       // on save; Dashboard pushes Entry and gets popped back to. No router pkg yet.
-      home: hasTargets
-          ? DashboardScreen(userId: userId)
-          : OnboardingScreen(userId: userId),
+      home: restoreLanded
+          ? const RestoreScreen()
+          : hasTargets
+              ? DashboardScreen(userId: userId)
+              : OnboardingScreen(userId: userId),
     );
   }
 }

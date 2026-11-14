@@ -9,7 +9,7 @@ import 'package:calorie_tracking_app/data/sync/backup_link.dart';
 Future<void> startLinkEmailFlow(BuildContext context) async {
   final email = await showDialog<String>(
     context: context,
-    builder: (_) => _EmailDialog(initial: BackupLink.status.value.email),
+    builder: (_) => EmailDialog(initial: BackupLink.status.value.email),
   );
   if (email == null || !context.mounted) return;
 
@@ -72,16 +72,27 @@ Future<void> _restoreOrCancel(BuildContext context) async {
   }
 }
 
-/// Email entry. Returns the trimmed email, or null on cancel.
-class _EmailDialog extends StatefulWidget {
+/// Email entry. Returns the trimmed email, or null on cancel. Shared by the
+/// link flow and the onboarding restore entry (Stage 7a).
+class EmailDialog extends StatefulWidget {
   final String? initial;
-  const _EmailDialog({this.initial});
+  final String title;
+  final String message;
+  final String action;
+  const EmailDialog({
+    super.key,
+    this.initial,
+    this.title = 'Link an email',
+    this.message = 'We\'ll email you a link. Tap it any time to secure '
+        'your backup — you can keep using the app meanwhile.',
+    this.action = 'Send link',
+  });
 
   @override
-  State<_EmailDialog> createState() => _EmailDialogState();
+  State<EmailDialog> createState() => _EmailDialogState();
 }
 
-class _EmailDialogState extends State<_EmailDialog> {
+class _EmailDialogState extends State<EmailDialog> {
   late final _ctrl = TextEditingController(text: widget.initial ?? '');
   String? _error;
 
@@ -103,13 +114,12 @@ class _EmailDialogState extends State<_EmailDialog> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-        title: const Text('Link an email'),
+        title: Text(widget.title),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('We\'ll email you a link. Tap it any time to secure '
-                'your backup — you can keep using the app meanwhile.'),
+            Text(widget.message),
             const SizedBox(height: 12),
             TextField(
               controller: _ctrl,
@@ -131,7 +141,7 @@ class _EmailDialogState extends State<_EmailDialog> {
             onPressed: () => Navigator.pop(context),
             child: const Text('Cancel'),
           ),
-          FilledButton(onPressed: _submit, child: const Text('Send link')),
+          FilledButton(onPressed: _submit, child: Text(widget.action)),
         ],
       );
 }

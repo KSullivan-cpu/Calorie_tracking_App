@@ -3,7 +3,10 @@ import 'package:drift/drift.dart' show Value;
 
 import 'package:calorie_tracking_app/core/bootstrap.dart';
 import 'package:calorie_tracking_app/data/app_database.dart';
+import 'package:calorie_tracking_app/data/sync/restore.dart';
 import 'package:calorie_tracking_app/features/dashboard/dashboard_screen.dart';
+import 'package:calorie_tracking_app/features/settings/link_email_flow.dart'
+    show EmailDialog;
 
 // Atwater factors for the B1 %-to-grams derivation.
 const double _kcalPerGramCarbs = 4;
@@ -127,6 +130,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          _restoreEntry(),
+          const SizedBox(height: 8),
           const Text(
             'Fill in what you want to track. Anything left blank is simply not '
             'tracked — you can change it later in Settings.',
@@ -157,6 +162,59 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       ),
     );
   }
+
+  /// FSD §3.6 primary restore entry (Stage 7a): magic-link sign-in to the
+  /// existing identity. Fire-and-continue — the prompt opens when tapped.
+  Future<void> _startRestore() async {
+    final email = await showDialog<String>(
+      context: context,
+      builder: (_) => const EmailDialog(
+        title: 'Restore from a previous phone',
+        message: 'Enter the email you linked on your old phone. We\'ll email '
+            'a sign-in link — tap it on this phone to restore.',
+      ),
+    );
+    if (email == null || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(const SnackBar(content: Text('Sending link…')));
+    final r = await Restore.start(email);
+    if (!mounted) return;
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+          content: Text(switch (r) {
+        RestoreStart.sent =>
+          'Link sent to $email. Tap it on this phone to restore.',
+        RestoreStart.noBackup => 'No backup found for $email.',
+        RestoreStart.offline =>
+          'You\'re offline. Restoring needs a connection.',
+        RestoreStart.failed => 'Couldn\'t send the link. Try again.',
+      })));
+  }
+
+  Widget _restoreEntry() => ValueListenableBuilder<String?>(
+        valueListenable: Restore.pendingEmail,
+        builder: (context, pending, _) => pending == null
+            ? Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: _startRestore,
+                  icon: const Icon(Icons.restore),
+                  label: const Text('Restoring from a previous phone?'),
+                ),
+              )
+            : Card(
+                child: ListTile(
+                  leading: const Icon(Icons.mark_email_unread_outlined),
+                  title: const Text('Waiting for your restore link'),
+                  subtitle: Text('Sent to $pending — tap it on this phone.'),
+                  trailing: TextButton(
+                    onPressed: () => Restore.abort(),
+                    child: const Text('Cancel'),
+                  ),
+                ),
+              ),
+      );
 
   Widget _section(String title) => Padding(
         padding: const EdgeInsets.only(top: 16, bottom: 4),

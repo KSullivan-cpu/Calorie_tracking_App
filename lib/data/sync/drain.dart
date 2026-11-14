@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/bootstrap.dart' show cloudConfigured, db;
 import 'reconciliation.dart';
+import 'restore.dart';
 import 'sync_health.dart';
 
 /// Outbox drain (Slice 2 FSD §5.3; Architecture §2.5.1).
@@ -62,6 +63,12 @@ class Drain {
       if (!cloudConfigured) return;
       if (!await Reconciliation.isReconciled()) {
         debugPrint('Drain[$reason]: gated — not reconciled yet');
+        return;
+      }
+      // Stage 7a: while a restore is pending the session may be the backup
+      // identity — never upload this phone's rows under it.
+      if (Restore.pending) {
+        debugPrint('Drain[$reason]: gated — restore pending');
         return;
       }
       if (!await isOnline()) {

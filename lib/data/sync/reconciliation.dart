@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/bootstrap.dart' show cloudConfigured, db;
 import '../app_database.dart';
 import '../enums.dart';
+import 'restore.dart';
 
 /// Identity reconciliation + one-time outbox seed (Slice 2 FSD §5.1, G10).
 ///
@@ -54,6 +55,14 @@ class Reconciliation {
 
     final prefs = await SharedPreferences.getInstance();
     if (prefs.getBool(flagKey) ?? false) return;
+
+    // Stage 7a: a pending restore may have switched the session to the
+    // backup identity — never rewrite/seed local data to it. Restore sets
+    // the flag itself after its pull (7b).
+    if (Restore.pending) {
+      debugPrint('Reconciliation: skipped — restore pending');
+      return;
+    }
 
     final cloudId = Supabase.instance.client.auth.currentUser?.id;
     if (cloudId == null) {
