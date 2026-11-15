@@ -1,4 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Release builds need this explicitly (Flutter only adds it to the
+         debug/profile manifests). Supabase backup + FDC lookup. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="calorie_tracking_app"
         android:name="${applicationName}"
