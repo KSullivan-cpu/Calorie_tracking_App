@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/material.dart';
 
 import 'package:calorie_tracking_app/data/sync/backup_link.dart';
+import 'package:calorie_tracking_app/data/sync/restore.dart';
 
 /// The one email-link flow (FSD §3.5/§5.4), shared by Settings → Backup and
 /// the dashboard nudge (Stage 6c). Fire-and-continue: returns once the link
@@ -28,20 +29,26 @@ Future<void> startLinkEmailFlow(BuildContext context) async {
           'email whenever you\'re ready.');
     case LinkRequestResult.existingBackup:
       messenger.hideCurrentSnackBar();
-      await _restoreOrCancel(context);
+      await _restoreOrCancel(context, email);
     case LinkRequestResult.offline:
       snack('You\'re offline. Linking needs a connection — try again when '
           'you\'re back online.');
     case LinkRequestResult.noSession:
       snack('Backup isn\'t signed in. Use Re-secure backup in Needs '
           'attention.');
+    case LinkRequestResult.rateLimited:
+      snack(BackupLink.rateLimitMessage);
     case LinkRequestResult.failed:
       snack('Couldn\'t send the link: ${out.error ?? 'unknown error'}');
   }
 }
 
 /// CG-2 (FSD §3.5): the email already belongs to a backup identity.
-Future<void> _restoreOrCancel(BuildContext context) async {
+/// Stage 7c: Restore → the same restore sign-in as onboarding (stash this
+/// phone's session, magic link to the backup identity). Tapping the link
+/// opens the restore screen, which confirms data exists and warns that this
+/// phone's data will be replaced. Cancel there switches back.
+Future<void> _restoreOrCancel(BuildContext context, String email) async {
   final restore = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
@@ -62,11 +69,22 @@ Future<void> _restoreOrCancel(BuildContext context) async {
   );
   if (!context.mounted) return;
   if (restore == true) {
-    // Stage 7 (FSD §5.5 from step 3). Device and link status unchanged.
-    debugPrint('BackupLink: restore chosen (stub until Stage 7)');
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Restore isn\'t built yet (Stage 7). Nothing was '
-            'changed.')));
+    debugPrint('BackupLink: restore chosen for $email');
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(const SnackBar(content: Text('Sending link…')));
+    final r = await Restore.start(email);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+          content: Text(switch (r) {
+        RestoreStart.sent => 'Sign-in link sent to $email. Tap it on this '
+            'phone to restore — nothing changes until you confirm.',
+        RestoreStart.noBackup => 'No backup found for $email.',
+        RestoreStart.offline =>
+          'You\'re offline. Restoring needs a connection.',
+        RestoreStart.rateLimited => BackupLink.rateLimitMessage,
+        RestoreStart.failed => 'Couldn\'t send the link. Try again.',
+      })));
   } else {
     debugPrint('BackupLink: existing backup — cancelled, device unchanged');
   }

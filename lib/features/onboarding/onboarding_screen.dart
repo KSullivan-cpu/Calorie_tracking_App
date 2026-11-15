@@ -3,6 +3,8 @@ import 'package:drift/drift.dart' show Value;
 
 import 'package:calorie_tracking_app/core/bootstrap.dart';
 import 'package:calorie_tracking_app/data/app_database.dart';
+import 'package:calorie_tracking_app/data/sync/backup_link.dart'
+    show BackupLink;
 import 'package:calorie_tracking_app/data/sync/restore.dart';
 import 'package:calorie_tracking_app/features/dashboard/dashboard_screen.dart';
 import 'package:calorie_tracking_app/features/settings/link_email_flow.dart'
@@ -188,6 +190,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         RestoreStart.noBackup => 'No backup found for $email.',
         RestoreStart.offline =>
           'You\'re offline. Restoring needs a connection.',
+        RestoreStart.rateLimited => BackupLink.rateLimitMessage,
         RestoreStart.failed => 'Couldn\'t send the link. Try again.',
       })));
   }

@@ -9,8 +9,9 @@ import 'package:calorie_tracking_app/features/onboarding/onboarding_screen.dart'
 /// restore sign-in has landed on the backup identity.
 ///
 /// 7a: detect (counts) → prompt (replace-warning when local data exists) →
-/// decline / no backup = switch back to this device's identity. Confirm is a
-/// placeholder until 7b (full pull).
+/// decline / no backup = switch back to this device's identity.
+/// 7b: confirm → non-cancellable progress → full pull → fresh navigation.
+/// A failed pull leaves the phone unchanged ("Try again" / "Cancel").
 class RestoreScreen extends StatefulWidget {
   const RestoreScreen({super.key});
 
@@ -18,13 +19,14 @@ class RestoreScreen extends StatefulWidget {
   State<RestoreScreen> createState() => _RestoreScreenState();
 }
 
-enum _Phase { checking, failed, none, found }
+enum _Phase { checking, failed, none, found, restoring, restoreFailed }
 
 class _RestoreScreenState extends State<RestoreScreen> {
   _Phase _phase = _Phase.checking;
   BackupCounts? _counts;
   bool _localData = false;
   bool _busy = false;
+  String _step = '';
 
   @override
   void initState() {
@@ -68,11 +70,25 @@ class _RestoreScreenState extends State<RestoreScreen> {
     await goHome(Navigator.of(context));
   }
 
-  void _confirm() {
-    // 7b: clear local synced tables + cache → full pull → reconciled → drain.
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Restore pull isn\'t built yet (Stage 7b). Nothing was '
-            'changed.')));
+  Future<void> _confirm() async {
+    setState(() {
+      _phase = _Phase.restoring;
+      _step = '';
+    });
+    try {
+      await Restore.run((t) {
+        if (!mounted) return;
+        setState(() => _step = t == 'saving'
+            ? 'Saving to this phone…'
+            : 'Downloading ${Restore.stepLabels[t] ?? t}…');
+      });
+    } catch (e) {
+      debugPrint('Restore: FAILED (phone unchanged): $e');
+      if (mounted) setState(() => _phase = _Phase.restoreFailed);
+      return;
+    }
+    if (!mounted) return;
+    await goHome(Navigator.of(context));
   }
 
   @override
@@ -104,6 +120,23 @@ class _RestoreScreenState extends State<RestoreScreen> {
                 'Nothing on this phone was changed.',
               ),
             _Phase.found => _found(),
+            _Phase.restoring => Center(
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  const CircularProgressIndicator(),
+                  const SizedBox(height: 12),
+                  const Text('Restoring your backup…',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  Text(_step),
+                  const SizedBox(height: 12),
+                  const Text('Keep the app open.'),
+                ]),
+              ),
+            _Phase.restoreFailed => _message(
+                'Restore didn\'t finish — nothing on this phone was changed. '
+                'Check your connection and try again.',
+                primary: ('Try again', _confirm),
+              ),
           },
         ),
       ),

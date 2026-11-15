@@ -1,13 +1,17 @@
 import 'dart:async' show unawaited;
 
+import 'package:drift/drift.dart' show TableUpdate;
+
 import 'package:flutter/foundation.dart' show ValueNotifier, debugPrint;
 import 'package:flutter/widgets.dart' show GlobalKey, NavigatorState;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' hide TableUpdate;
 
 import '../../core/bootstrap.dart' show cloudConfigured, db;
-import 'backup_link.dart' show BackupLink;
+import 'backup_link.dart' show BackupLink, LinkState;
 import 'drain.dart';
+import 'reconciliation.dart';
+import 'sync_health.dart';
 import 'sync_triggers.dart';
 
 /// Restore (Slice 2 FSD §3.6, §5.5) — Stage 7a: intent, sign-in, detection.
@@ -92,7 +96,9 @@ class Restore {
       debugPrint('Restore: link request failed '
           '(code=${e.code}, status=${e.statusCode}): ${e.message}');
       await _clear();
-      return _isNoAccount(e) ? RestoreStart.noBackup : RestoreStart.failed;
+      if (_isNoAccount(e)) return RestoreStart.noBackup;
+      if (BackupLink.isEmailRateLimited(e)) return RestoreStart.rateLimited;
+      return RestoreStart.failed;
     } catch (e) {
       debugPrint('Restore: link request failed: $e');
       await _clear();
@@ -182,6 +188,147 @@ class Restore {
     return r.read<int>('n') > 0;
   }
 
+  // ---------------------------------------------------------------- 7b pull
+
+  /// Synced tables in INSERT order (parents first). Deletes run in reverse.
+  static const _pullTables = [
+    'users',
+    'per_user_targets',
+    'food_entries',
+    'saved_items',
+    'water_entries',
+    'weight_entries',
+    'tracked_supplements',
+    'supplement_entries',
+  ];
+
+  /// Friendly names for the progress screen.
+  static const stepLabels = {
+    'users': 'account',
+    'per_user_targets': 'targets',
+    'food_entries': 'food entries',
+    'saved_items': 'saved items',
+    'water_entries': 'water entries',
+    'weight_entries': 'weight entries',
+    'tracked_supplements': 'supplements',
+    'supplement_entries': 'supplement entries',
+  };
+
+  static const _pageSize = 1000; // Supabase default max rows per request
+
+  /// Inverse of the drain's type mapping (Architecture §2.5.3).
+  static const _timestampCols = {
+    'created_at',
+    'updated_at',
+    'deleted_at',
+    'entry_timestamp',
+  };
+  static const _boolCols = {'is_verified'};
+
+  /// FSD §5.5 step 4. Pull first (nothing local touched), then ONE
+  /// transaction: clear synced tables + cache + outbox → insert pulled rows
+  /// (incl. soft-deleted; not enqueued — already in the cloud). Then flags,
+  /// link status, sync health, clear restore state, resume drain.
+  /// Throws on failure; the phone is unchanged unless the transaction committed.
+  static Future<void> run(void Function(String table) onStep) async {
+    final client = Supabase.instance.client;
+    final uid = client.auth.currentUser!.id;
+    final email = pendingEmail.value;
+
+    // 1. Pull everything into memory.
+    final pulled = <String, List<Map<String, dynamic>>>{};
+    for (final t in _pullTables) {
+      onStep(t);
+      final rows = <Map<String, dynamic>>[];
+      for (var from = 0;; from += _pageSize) {
+        final page = await client
+            .from(t)
+            .select()
+            .eq(t == 'users' ? 'id' : 'user_id', uid)
+            .order('id')
+            .range(from, from + _pageSize - 1);
+        rows.addAll(page);
+        if (page.length < _pageSize) break;
+      }
+      pulled[t] = rows;
+    }
+    final sizes = {for (final e in pulled.entries) e.key: e.value.length};
+    debugPrint('Restore: pulled $sizes');
+
+    // 2. Local column sets (only copy columns the device has).
+    final localCols = <String, Set<String>>{};
+    for (final t in _pullTables) {
+      final info = await db.customSelect('PRAGMA table_info($t)').get();
+      localCols[t] = info.map((r) => r.read<String>('name')).toSet();
+    }
+
+    // 3. One transaction: replace local data.
+    onStep('saving');
+    await db.transaction(() async {
+      for (final t in _pullTables.reversed) {
+        await db.customStatement('DELETE FROM $t');
+      }
+      await db.customStatement('DELETE FROM lookup_cache_entries');
+      await db.customStatement('DELETE FROM outbox_entries');
+
+      for (final t in _pullTables) {
+        for (final row in pulled[t]!) {
+          final local = _toLocal(row, localCols[t]!);
+          final cols = local.keys.toList();
+          await db.customStatement(
+            'INSERT INTO $t (${cols.join(', ')}) '
+            'VALUES (${List.filled(cols.length, '?').join(', ')})',
+            [for (final c in cols) local[c]],
+          );
+        }
+      }
+
+      // The User row must exist (the app keys everything on it).
+      if (pulled['users']!.isEmpty) {
+        final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+        await db.customStatement(
+          'INSERT INTO users (id, created_at, updated_at, version) '
+          'VALUES (?, ?, ?, 1)',
+          [uid, now, now],
+        );
+        debugPrint('Restore: no cloud users row — created local $uid');
+      }
+    });
+    // Wake every drift watcher (raw statements don't notify).
+    db.notifyUpdates({
+      for (final t in db.allTables) TableUpdate.onTable(t),
+    });
+
+    // 4. App-local state. Reconciled: the data already IS the cloud identity.
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(Reconciliation.flagKey, true);
+    await prefs.setBool(Reconciliation.catchUpKey, true);
+    await _clear(); // restore no longer pending — before link status
+    if (email != null) await BackupLink.set(LinkState.linked, email: email);
+    await SyncHealth.recordSuccess();
+    debugPrint('Restore: DONE as $uid');
+    unawaited(SyncTriggers.runNow('restore'));
+  }
+
+  /// Cloud row → device row (inverse of Drain._toCloud).
+  static Map<String, Object?> _toLocal(
+      Map<String, dynamic> row, Set<String> cols) {
+    final out = <String, Object?>{};
+    row.forEach((col, v) {
+      if (!cols.contains(col)) return;
+      if (v == null) {
+        out[col] = null;
+      } else if (_timestampCols.contains(col)) {
+        out[col] = DateTime.parse(v as String).millisecondsSinceEpoch ~/ 1000;
+      } else if (_boolCols.contains(col)) {
+        out[col] = (v == true) ? 1 : 0;
+      } else {
+        out[col] = v; // uuid/text/enum text/real/integer pass through
+      }
+    });
+    return out;
+  }
+
   /// Decline / no backup: switch back to this device's identity and clear the
   /// restore state. Returns false if switching back failed (stays pending).
   static Future<bool> abort() async {
@@ -236,7 +383,7 @@ class Restore {
   }
 }
 
-enum RestoreStart { sent, noBackup, offline, failed }
+enum RestoreStart { sent, noBackup, offline, rateLimited, failed }
 
 class BackupCounts {
   final int foodEntries, savedItems, targets, water, weight, supplements,

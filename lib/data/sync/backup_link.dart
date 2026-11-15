@@ -44,7 +44,14 @@ class LinkStatus {
   static const notLinked = LinkStatus(LinkState.none);
 }
 
-enum LinkRequestResult { sent, existingBackup, offline, noSession, failed }
+enum LinkRequestResult {
+  sent,
+  existingBackup,
+  offline,
+  noSession,
+  rateLimited,
+  failed,
+}
 
 enum ReSecureResult { sent, notLinked, offline, failed }
 
@@ -229,12 +236,22 @@ class BackupLink {
       if (_isEmailTaken(e)) {
         return const LinkRequestOutcome(LinkRequestResult.existingBackup);
       }
+      if (isEmailRateLimited(e)) {
+        return const LinkRequestOutcome(LinkRequestResult.rateLimited);
+      }
       return LinkRequestOutcome(LinkRequestResult.failed, e.message);
     } catch (e) {
       debugPrint('BackupLink: request failed: $e');
       return LinkRequestOutcome(LinkRequestResult.failed, '$e');
     }
   }
+
+  /// Supabase's built-in sender caps emails per hour (429).
+  static bool isEmailRateLimited(AuthException e) =>
+      e.code == 'over_email_send_rate_limit' || e.statusCode == '429';
+
+  static const rateLimitMessage =
+      'Too many emails sent recently — try again in about an hour.';
 
   static bool _isEmailTaken(AuthException e) =>
       e.code == 'email_exists' ||
