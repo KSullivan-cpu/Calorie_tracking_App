@@ -630,13 +630,17 @@ class _EntryScreenState extends State<EntryScreen> {
             ),
           ),
           _impactPanel(),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-            child: SizedBox(
-              width: double.infinity,
-              child: FilledButton(
-                onPressed: (_saving || _items.isEmpty) ? null : _commitAll,
-                child: Text(_saving ? 'Committing…' : 'Commit all'),
+          // Keep Commit clear of the Android nav bar (edge-to-edge).
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+              child: SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: (_saving || _items.isEmpty) ? null : _commitAll,
+                  child: Text(_saving ? 'Committing…' : 'Commit all'),
+                ),
               ),
             ),
           ),
