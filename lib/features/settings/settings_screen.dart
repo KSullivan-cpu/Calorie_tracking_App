@@ -5,6 +5,7 @@ import 'package:calorie_tracking_app/core/bootstrap.dart';
 import 'package:calorie_tracking_app/data/app_database.dart';
 import 'package:calorie_tracking_app/features/library/saved_items_list.dart';
 import 'package:calorie_tracking_app/features/settings/backup_section.dart';
+import 'package:calorie_tracking_app/features/supplements/supplements_section.dart';
 
 // Atwater factors for the B1 %-to-grams derivation (mirrors onboarding).
 const double _kcalPerGramCarbs = 4;
@@ -38,6 +39,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _addedSugar = TextEditingController();
   final _carbsPct = TextEditingController();
   final _fatsPct = TextEditingController();
+  final _water = TextEditingController(); // oz/day (Slice 3, MARD v1.0.3)
 
   int? _loadedCalorie; // to detect a calorie-target change on save
   bool _ready = false;
@@ -62,6 +64,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _veggieCups.text = _fmt(t.veggieCupsTarget!);
       }
       if (t.addedSugarLimit != null) _addedSugar.text = _fmt(t.addedSugarLimit!);
+      if (t.waterTarget != null) _water.text = _fmt(t.waterTarget!);
       // Back-compute carbs/fats % from the frozen grams + calorie target.
       final cal = t.calorieTarget;
       if (t.carbsLimitG != null && cal != null && cal > 0) {
@@ -85,6 +88,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _addedSugar,
       _carbsPct,
       _fatsPct,
+      _water,
     ]) {
       c.dispose();
     }
@@ -108,6 +112,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final calorie = _pInt(_calorie);
     final carbsPct = _pDbl(_carbsPct);
     final fatsPct = _pDbl(_fatsPct);
+    final water = _pDbl(_water);
+
+    // Slice 3 FSD §3.2 (Review CG-1): water target > 0 when set.
+    if (water != null && water <= 0) {
+      setState(() => _error = 'Water target must be more than 0 oz. '
+          'Clear the field to stop tracking water.');
+      return;
+    }
 
     // Conditional gate (FSD §3.1 / §3.6): a %-of-calories metric requires the
     // calorie target; you clear the % limits before you can clear calories.
@@ -143,8 +155,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       fatsLimitG = calorie * (fatsPct / 100) / _kcalPerGramFats;
     }
 
-    // Explicit values (incl. null) for every food column so clearing a field
-    // un-tracks it. water/weight left absent -> untouched (managed later).
+    // Explicit values (incl. null) for every food column + water so clearing
+    // a field un-tracks it. weight left absent -> untouched (Slice 4).
     final companion = PerUserTargetsCompanion(
       userId: Value(widget.userId),
       calorieTarget: Value(calorie),
@@ -155,6 +167,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       addedSugarLimit: Value(_pDbl(_addedSugar)),
       carbsLimitG: Value(carbsLimitG),
       fatsLimitG: Value(fatsLimitG),
+      waterTarget: Value(water),
     );
 
     setState(() {
@@ -217,21 +230,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          const Text('Edit your food targets. Clearing a field stops tracking '
+          const Text('Edit your targets. Clearing a field stops tracking '
               'that metric.'),
           const SizedBox(height: 16),
-          _section('Dietary goal'),
-          _field(_calorie, 'Calorie target', 'kcal/day'),
-          _section('Fruits & veggies'),
-          _field(_fruitCups, 'Fruit target', 'cups/day'),
-          _field(_veggieCups, 'Veggie target', 'cups/day'),
-          _section('Macros'),
-          _field(_protein, 'Protein target', 'g/day'),
-          _field(_carbsPct, 'Carbs limit', '% of calories'),
-          _field(_fatsPct, 'Fats limit', '% of calories'),
-          _section('Macro nutritional'),
-          _field(_addedSugar, 'Added sugar limit', 'g/day'),
-          _field(_fiber, 'Fiber target', 'g/day'),
+          // Collapsible, collapsed by default (Slice 3 Stage 2 decision).
+          // Save covers every field, open or closed (controllers live in State).
+          _group('Dietary goal', [
+            _field(_calorie, 'Calorie target', 'kcal/day'),
+          ]),
+          _group('Fruits & veggies', [
+            _field(_fruitCups, 'Fruit target', 'cups/day'),
+            _field(_veggieCups, 'Veggie target', 'cups/day'),
+          ]),
+          _group('Macros', [
+            _field(_protein, 'Protein target', 'g/day'),
+            _field(_carbsPct, 'Carbs limit', '% of calories'),
+            _field(_fatsPct, 'Fats limit', '% of calories'),
+          ]),
+          _group('Macro nutritional', [
+            _field(_addedSugar, 'Added sugar limit', 'g/day'),
+            _field(_fiber, 'Fiber target', 'g/day'),
+          ]),
+          _group('Water', [
+            _field(_water, 'Water target', 'oz/day'),
+          ]),
           if (_error != null) ...[
             const SizedBox(height: 12),
             Text(_error!,
@@ -255,6 +277,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 SavedItemsList.openManage(context, userId: widget.userId),
           ),
           const Divider(),
+          // Slice 3 FSD §3.2: Supplements list (saves immediately, not via Save).
+          _group('Supplements', [SupplementsSection(userId: widget.userId)]),
+          const Divider(),
           // Slice 2 FSD §3.5: Backup section (Stage 6a).
           BackupSection(userId: widget.userId),
         ],
@@ -262,9 +287,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _section(String title) => Padding(
-        padding: const EdgeInsets.only(top: 16, bottom: 4),
-        child: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+  Widget _group(String title, List<Widget> children) => ExpansionTile(
+        title: Text(title,
+            style: const TextStyle(fontWeight: FontWeight.bold)),
+        tilePadding: EdgeInsets.zero,
+        childrenPadding: const EdgeInsets.only(bottom: 8),
+        expandedCrossAxisAlignment: CrossAxisAlignment.start,
+        shape: const Border(),
+        collapsedShape: const Border(),
+        children: children,
       );
 
   Widget _field(TextEditingController c, String label, String unit) => Padding(

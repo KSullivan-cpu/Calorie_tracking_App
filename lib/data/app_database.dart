@@ -10,6 +10,8 @@ import 'daos/per_user_targets_dao.dart';
 import 'daos/food_entry_dao.dart';
 import 'daos/saved_item_dao.dart';
 import 'daos/lookup_cache_dao.dart';
+import 'daos/water_entry_dao.dart';
+import 'daos/tracked_supplement_dao.dart';
 
 part 'app_database.g.dart';
 
@@ -24,6 +26,7 @@ part 'app_database.g.dart';
   daos: [
     UserDao, PerUserTargetsDao, FoodEntryDao,
     SavedItemDao, LookupCacheDao,
+    WaterEntryDao, TrackedSupplementDao,
   ],
 )
 class AppDatabase extends _$AppDatabase {

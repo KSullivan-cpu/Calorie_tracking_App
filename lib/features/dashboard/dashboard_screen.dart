@@ -8,6 +8,7 @@ import 'package:calorie_tracking_app/features/dashboard/day_totals.dart';
 import 'package:calorie_tracking_app/features/dashboard/metric_bar.dart';
 import 'package:calorie_tracking_app/features/dashboard/unverified_note.dart';
 import 'package:calorie_tracking_app/features/entry/entry_screen.dart';
+import 'package:calorie_tracking_app/features/quicklog/quick_log_screen.dart';
 import 'package:calorie_tracking_app/features/settings/settings_screen.dart';
 
 /// Stage 2d dashboard = the "today" view (MARD §1.4). Committed 8-metric totals
@@ -40,17 +41,42 @@ class DashboardScreen extends StatelessWidget {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => EntryScreen(userId: userId)),
-        ),
-        icon: const Icon(Icons.add),
-        label: const Text('Log food'),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          // Slice 3 FSD §3.4 (D1, D8): quick-log button, always shown.
+          FloatingActionButton.extended(
+            heroTag: 'quicklog',
+            backgroundColor:
+                Theme.of(context).colorScheme.secondaryContainer,
+            foregroundColor:
+                Theme.of(context).colorScheme.onSecondaryContainer,
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                  builder: (_) => QuickLogScreen(userId: userId)),
+            ),
+            icon: const Icon(Icons.water_drop_outlined),
+            label: const Text('Water & supplements'),
+          ),
+          const SizedBox(height: 12),
+          FloatingActionButton.extended(
+            heroTag: 'food',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => EntryScreen(userId: userId)),
+            ),
+            icon: const Icon(Icons.add),
+            label: const Text('Log food'),
+          ),
+        ],
       ),
       body: StreamBuilder<PerUserTarget?>(
         stream: db.perUserTargetsDao.watchTargets(userId),
         builder: (context, targetSnap) {
           final targets = targetSnap.data;
+          return StreamBuilder<double>(
+            stream: db.waterEntryDao.watchDayTotal(userId, _todayStart),
+            builder: (context, waterSnap) {
           return StreamBuilder<List<FoodEntry>>(
             stream: db.foodEntryDao.watchEntriesForDay(userId, _todayStart),
             builder: (context, entrySnap) {
@@ -58,7 +84,18 @@ class DashboardScreen extends StatelessWidget {
                 return const Center(child: CircularProgressIndicator());
               }
               final rows = buildMetricRows(entrySnap.data!, targets);
-              if (rows.isEmpty) {
+              // Slice 3 FSD §3.4: water tile only when a target is set (D8).
+              final waterTarget = targets?.waterTarget;
+              final waterRow = waterTarget == null
+                  ? null
+                  : MetricRow(
+                      label: 'Water',
+                      consumed: waterSnap.data ?? 0,
+                      target: waterTarget,
+                      unit: 'oz',
+                      kind: MetricKind.buildUp,
+                    );
+              if (rows.isEmpty && waterRow == null) {
                 return const Center(
                   child: Padding(
                     padding: EdgeInsets.all(32),
@@ -77,7 +114,7 @@ class DashboardScreen extends StatelessWidget {
               final stayUnder =
                   rows.where((r) => r.kind == MetricKind.stayUnder).toList();
               return ListView(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 168),
                 children: [
                   // FSD §3.7 one-time backup nudge (Stage 6c).
                   const BackupNudge(),
@@ -94,8 +131,15 @@ class DashboardScreen extends StatelessWidget {
                     _header('Stay under'),
                     ...stayUnder.map(MetricBar.new),
                   ],
+                  if (waterRow != null) ...[
+                    const SizedBox(height: 16),
+                    _header('Hydration'),
+                    MetricBar(waterRow),
+                  ],
                 ],
               );
+            },
+          );
             },
           );
         },
