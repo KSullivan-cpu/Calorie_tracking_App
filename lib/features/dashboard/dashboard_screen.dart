@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 
 import 'package:calorie_tracking_app/core/bootstrap.dart';
 import 'package:calorie_tracking_app/data/app_database.dart';
+import 'package:calorie_tracking_app/data/daos/supplement_entry_dao.dart';
 import 'package:calorie_tracking_app/features/attention/needs_attention.dart';
 import 'package:calorie_tracking_app/features/dashboard/backup_nudge.dart';
 import 'package:calorie_tracking_app/features/dashboard/day_totals.dart';
 import 'package:calorie_tracking_app/features/dashboard/metric_bar.dart';
+import 'package:calorie_tracking_app/features/dashboard/supplement_tile.dart';
 import 'package:calorie_tracking_app/features/dashboard/unverified_note.dart';
 import 'package:calorie_tracking_app/features/entry/entry_screen.dart';
 import 'package:calorie_tracking_app/features/quicklog/quick_log_screen.dart';
@@ -77,6 +79,11 @@ class DashboardScreen extends StatelessWidget {
           return StreamBuilder<double>(
             stream: db.waterEntryDao.watchDayTotal(userId, _todayStart),
             builder: (context, waterSnap) {
+          // Slice 3 FSD §3.4: one tile per active supplement, A–Z (D8).
+          return StreamBuilder<List<SupplementCount>>(
+            stream: db.supplementEntryDao.watchDayCounts(userId, _todayStart),
+            builder: (context, suppSnap) {
+          final supps = suppSnap.data ?? const <SupplementCount>[];
           return StreamBuilder<List<FoodEntry>>(
             stream: db.foodEntryDao.watchEntriesForDay(userId, _todayStart),
             builder: (context, entrySnap) {
@@ -95,7 +102,7 @@ class DashboardScreen extends StatelessWidget {
                       unit: 'oz',
                       kind: MetricKind.buildUp,
                     );
-              if (rows.isEmpty && waterRow == null) {
+              if (rows.isEmpty && waterRow == null && supps.isEmpty) {
                 return const Center(
                   child: Padding(
                     padding: EdgeInsets.all(32),
@@ -136,8 +143,15 @@ class DashboardScreen extends StatelessWidget {
                     _header('Hydration'),
                     MetricBar(waterRow),
                   ],
+                  if (supps.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    _header('Supplements'),
+                    ...supps.map(SupplementTile.new),
+                  ],
                 ],
               );
+            },
+          );
             },
           );
             },

@@ -9,6 +9,8 @@ import 'package:calorie_tracking_app/data/sync/restore.dart';
 import 'package:calorie_tracking_app/features/dashboard/dashboard_screen.dart';
 import 'package:calorie_tracking_app/features/settings/link_email_flow.dart'
     show EmailDialog;
+import 'package:calorie_tracking_app/features/supplements/supplement_dialog.dart';
+import 'package:calorie_tracking_app/features/supplements/supplements_section.dart';
 
 // Atwater factors for the B1 %-to-grams derivation.
 const double _kcalPerGramCarbs = 4;
@@ -35,6 +37,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   final _addedSugar = TextEditingController();
   final _carbsPct = TextEditingController();
   final _fatsPct = TextEditingController();
+  final _water = TextEditingController(); // oz/day (Slice 3 FSD §3.3)
+
+  /// Supplements Yes/No (Slice 3 FSD §3.3, Stage 4 O2). Null = unanswered.
+  /// Once any supplement exists the answer is locked to Yes (O3).
+  bool? _takesSupplements;
 
   String? _error;
   bool _saving = false;
@@ -50,6 +57,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       _addedSugar,
       _carbsPct,
       _fatsPct,
+      _water,
     ]) {
       c.dispose();
     }
@@ -72,6 +80,16 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     final calorie = _parseInt(_calorie);
     final carbsPct = _parseDouble(_carbsPct);
     final fatsPct = _parseDouble(_fatsPct);
+
+    // Water (Slice 3 FSD §3.3, Stage 4 O4): blank = not tracked; anything
+    // else must be a number > 0.
+    final waterText = _water.text.trim();
+    final water = _parseDouble(_water);
+    if (waterText.isNotEmpty && (water == null || water <= 0)) {
+      setState(() => _error = 'Water target must be a number more than 0 oz, '
+          'or leave it blank to not track water.');
+      return;
+    }
 
     // Conditional gate: a %-of-calories metric requires the calorie target.
     final usesPct = carbsPct != null || fatsPct != null;
@@ -108,7 +126,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           : Value(carbsLimitG),
       fatsLimitG:
           fatsLimitG == null ? const Value.absent() : Value(fatsLimitG),
-      // water_target / weight_target stay absent -> null (later slices).
+      waterTarget: val(water),
+      // weight_target stays absent -> null (Slice 4).
     );
 
     setState(() {
@@ -151,6 +170,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           _section('Macro nutritional'),
           _field(_addedSugar, 'Added sugar limit', 'g/day'),
           _field(_fiber, 'Fiber target', 'g/day'),
+          _section('Hydration'),
+          _field(_water, 'Water target', 'oz/day'),
+          _section('Supplements'),
+          _supplements(),
           if (_error != null) ...[
             const SizedBox(height: 12),
             Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
@@ -217,6 +240,49 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   ),
                 ),
               ),
+      );
+
+  /// Supplements Yes/No (O2) + the shared Settings list (add / edit /
+  /// delete). The dialog saves immediately (Stage 2), so once any supplement
+  /// exists No is disabled (O3) — also covers onboarding left mid-way.
+  Widget _supplements() => StreamBuilder<List<TrackedSupplement>>(
+        stream: db.trackedSupplementDao.watchActive(widget.userId),
+        builder: (context, snap) {
+          final hasAny = (snap.data ?? const []).isNotEmpty;
+          final yes = hasAny || _takesSupplements == true;
+          final selected = yes
+              ? {true}
+              : (_takesSupplements == false ? {false} : <bool>{});
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Do you take supplements you want to track?'),
+              const SizedBox(height: 8),
+              SegmentedButton<bool>(
+                emptySelectionAllowed: true,
+                showSelectedIcon: false,
+                segments: [
+                  const ButtonSegment(value: true, label: Text('Yes')),
+                  ButtonSegment(
+                      value: false, label: const Text('No'), enabled: !hasAny),
+                ],
+                selected: selected,
+                onSelectionChanged: (s) {
+                  if (s.isEmpty) return; // tapping the selected one: keep it
+                  final v = s.first;
+                  setState(() => _takesSupplements = v);
+                  if (v && !hasAny) {
+                    showSupplementDialog(context, userId: widget.userId);
+                  }
+                },
+              ),
+              if (yes) ...[
+                const SizedBox(height: 8),
+                SupplementsSection(userId: widget.userId),
+              ],
+            ],
+          );
+        },
       );
 
   Widget _section(String title) => Padding(

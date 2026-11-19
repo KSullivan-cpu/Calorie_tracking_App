@@ -179,11 +179,18 @@ class Restore {
   }
 
   /// Does this phone hold data that a restore would replace?
+  /// Every synced table except `users` (Slice 3 Stage 5 R1: water,
+  /// supplements and weight added — supplements can exist mid-onboarding,
+  /// before the targets row is written).
   static Future<bool> hasLocalData() async {
     final r = await db.customSelect(
       'SELECT (SELECT COUNT(*) FROM food_entries) + '
       '(SELECT COUNT(*) FROM saved_items) + '
-      '(SELECT COUNT(*) FROM per_user_targets) AS n',
+      '(SELECT COUNT(*) FROM per_user_targets) + '
+      '(SELECT COUNT(*) FROM water_entries) + '
+      '(SELECT COUNT(*) FROM weight_entries) + '
+      '(SELECT COUNT(*) FROM tracked_supplements) + '
+      '(SELECT COUNT(*) FROM supplement_entries) AS n',
     ).getSingle();
     return r.read<int>('n') > 0;
   }

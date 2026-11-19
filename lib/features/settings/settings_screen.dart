@@ -24,7 +24,15 @@ const double _kcalPerGramFats = 9;
 /// (including null) for every food column, unlike onboarding's absent-on-insert.
 class SettingsScreen extends StatefulWidget {
   final String userId;
-  const SettingsScreen({super.key, required this.userId});
+
+  /// Section to open expanded and scroll to (Slice 3 Stage 4 O5) — used by
+  /// the quick-log empty-state links. Null = all collapsed (default).
+  final String? expand;
+
+  static const sectionWater = 'Water';
+  static const sectionSupplements = 'Supplements';
+
+  const SettingsScreen({super.key, required this.userId, this.expand});
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -43,6 +51,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   int? _loadedCalorie; // to detect a calorie-target change on save
   bool _ready = false;
+  final _expandKey = GlobalKey(); // on the section named by widget.expand
   bool _saving = false;
   String? _error;
 
@@ -74,7 +83,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _fatsPct.text = _fmt(t.fatsLimitG! * _kcalPerGramFats / cal * 100);
       }
     }
-    if (mounted) setState(() => _ready = true);
+    if (!mounted) return;
+    setState(() => _ready = true);
+    if (widget.expand != null) {
+      // Scroll the pre-expanded section into view once it has laid out.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final ctx = _expandKey.currentContext;
+        if (ctx != null) {
+          Scrollable.ensureVisible(ctx,
+              duration: const Duration(milliseconds: 300));
+        }
+      });
+    }
   }
 
   @override
@@ -251,7 +271,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _field(_addedSugar, 'Added sugar limit', 'g/day'),
             _field(_fiber, 'Fiber target', 'g/day'),
           ]),
-          _group('Water', [
+          _group(SettingsScreen.sectionWater, [
             _field(_water, 'Water target', 'oz/day'),
           ]),
           if (_error != null) ...[
@@ -278,7 +298,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const Divider(),
           // Slice 3 FSD §3.2: Supplements list (saves immediately, not via Save).
-          _group('Supplements', [SupplementsSection(userId: widget.userId)]),
+          _group(SettingsScreen.sectionSupplements,
+              [SupplementsSection(userId: widget.userId)]),
           const Divider(),
           // Slice 2 FSD §3.5: Backup section (Stage 6a).
           BackupSection(userId: widget.userId),
@@ -288,6 +309,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _group(String title, List<Widget> children) => ExpansionTile(
+        key: title == widget.expand ? _expandKey : null,
+        initiallyExpanded: title == widget.expand,
         title: Text(title,
             style: const TextStyle(fontWeight: FontWeight.bold)),
         tilePadding: EdgeInsets.zero,

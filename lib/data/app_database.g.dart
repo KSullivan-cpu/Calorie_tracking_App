@@ -6941,6 +6941,9 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final TrackedSupplementDao trackedSupplementDao = TrackedSupplementDao(
     this as AppDatabase,
   );
+  late final SupplementEntryDao supplementEntryDao = SupplementEntryDao(
+    this as AppDatabase,
+  );
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
